@@ -303,16 +303,16 @@ final class SML_Core {
             return 0;
         }
 
-        $sql = "SELECT p.ID FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = '_sml_language' WHERE p.post_name = %s AND pm.meta_value = %s AND p.post_type IN ({$placeholders}) AND p.post_status IN ('publish', 'private') ORDER BY p.ID ASC LIMIT 1";
-        $values = array_merge( array( $post_name, $language ), $post_types );
+        $sql = "SELECT DISTINCT p.ID FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = '_sml_language' LEFT JOIN {$wpdb->postmeta} visible ON visible.post_id = p.ID AND visible.meta_key = '_sml_visible_in' WHERE p.post_name = %s AND ( pm.meta_value = %s OR visible.meta_value = %s ) AND p.post_type IN ({$placeholders}) AND p.post_status IN ('publish', 'private') ORDER BY ( pm.meta_value = %s ) DESC, p.ID ASC LIMIT 1";
+        $values = array_merge( array( $post_name, $language, $language ), $post_types, array( $language ) );
         return (int) $wpdb->get_var( $wpdb->prepare( $sql, $values ) );
     }
 
     private static function find_term_by_slug( $taxonomy, $slug, $language ) {
         global $wpdb;
 
-        $sql = "SELECT t.term_id, t.name, t.slug, tt.taxonomy FROM {$wpdb->terms} t INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id INNER JOIN {$wpdb->termmeta} tm ON tm.term_id = t.term_id AND tm.meta_key = '_sml_language' WHERE tt.taxonomy = %s AND t.slug = %s AND tm.meta_value = %s LIMIT 1";
-        $row = $wpdb->get_row( $wpdb->prepare( $sql, $taxonomy, sanitize_title( $slug ), $language ) );
+        $sql = "SELECT DISTINCT t.term_id, t.name, t.slug, tt.taxonomy FROM {$wpdb->terms} t INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id INNER JOIN {$wpdb->termmeta} tm ON tm.term_id = t.term_id AND tm.meta_key = '_sml_language' LEFT JOIN {$wpdb->termmeta} visible ON visible.term_id = t.term_id AND visible.meta_key = '_sml_visible_in' WHERE tt.taxonomy = %s AND t.slug = %s AND ( tm.meta_value = %s OR visible.meta_value = %s ) ORDER BY ( tm.meta_value = %s ) DESC, t.term_id ASC LIMIT 1";
+        $row = $wpdb->get_row( $wpdb->prepare( $sql, $taxonomy, sanitize_title( $slug ), $language, $language, $language ) );
         return $row ? get_term( (int) $row->term_id, $taxonomy ) : false;
     }
 
