@@ -269,11 +269,17 @@ final class SML_Core {
             }
 
             $base = is_array( $object->rewrite ) && ! empty( $object->rewrite['slug'] ) ? trim( $object->rewrite['slug'], '/' ) : $taxonomy;
-            if ( $path === $base || 0 !== strpos( $path, $base . '/' ) ) {
-                continue;
+            if ( '.' === $base || '' === $base ) {
+                if ( false !== strpos( $path, '/' ) ) {
+                    continue;
+                }
+                $slug = $path;
+            } else {
+                if ( $path === $base || 0 !== strpos( $path, $base . '/' ) ) {
+                    continue;
+                }
+                $slug = basename( $path );
             }
-
-            $slug = basename( $path );
             $term = self::find_term_by_slug( $taxonomy, $slug, $language );
             if ( $term ) {
                 return array( 'taxonomy' => $taxonomy, 'slug' => $term->slug );
@@ -359,6 +365,7 @@ final class SML_Core {
     }
 
     private static function add_language_to_url( $url, $language ) {
+        $url = str_replace( '/./', '/', $url );
         $languages = self::get_languages();
         if ( ! $language || ! isset( $languages[ $language ] ) || $language === self::get_default_language() ) {
             return $url;
