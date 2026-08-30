@@ -7,11 +7,15 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 - All write actions require WordPress capabilities and nonces.
 - Translation IDs are checked against the object type before a relationship is saved.
 - There is no automatic translation service, telemetry or debug logging.
-- GitHub updates are read from release metadata only. Private repositories require an optional read-only token defined in `wp-config.php`, never in a WordPress option.
+- GitHub updates are read from public release metadata. No token or paid service is required. Private forks can use an optional read-only token defined in `wp-config.php`, never in a WordPress option.
 
 ## Release process
 
-Push a semantic-version tag such as `v1.1.1`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip` and creates a GitHub Release. WordPress discovers it on the usual plugin-update schedule.
+Push a semantic-version tag such as `v1.2.1`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip` and creates a public GitHub Release. WordPress discovers it on the usual plugin-update schedule.
+
+## License
+
+Simple Multilang Blocks is free software, released under the GNU General Public License version 2 or later (GPL-2.0-or-later). You may use, study, modify and redistribute it under those terms. See [LICENSE](LICENSE).
 
 ## WPML migration
 

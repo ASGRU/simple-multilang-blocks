@@ -3,7 +3,7 @@
 defined( 'ABSPATH' ) || exit;
 
 final class SML_GitHub_Updater {
-    const TRANSIENT_KEY = 'sml_github_release_1_2_0';
+    const TRANSIENT_KEY = 'sml_github_release_1_2_1';
 
     private static $instance;
 

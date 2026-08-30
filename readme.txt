@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.2.0
+Stable tag: 1.2.1
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -18,13 +18,17 @@ A lightweight multilingual layer for block-based WordPress sites.
 
 == Updating from GitHub ==
 
-Create a GitHub Release whose tag is a semantic version (for example `v1.1.1`) and attach an asset named `simple-multilang-blocks.zip`. WordPress then shows the normal update notification.
+This public repository uses GitHub Releases. Create a release whose tag is a semantic version (for example `v1.2.1`) and attach an asset named `simple-multilang-blocks.zip`. WordPress then shows the normal update notification; no token or paid service is needed.
 
 For a private repository, set a fine-grained read-only token in `wp-config.php`:
 
 `define( 'SML_GITHUB_TOKEN', 'github_pat_...' );`
 
 The token is never stored in the database or displayed in WordPress.
+
+== License ==
+
+GPL-2.0-or-later. This plugin is free software: you may use, study, modify and redistribute it under the GNU General Public License version 2 or later. See the included LICENSE file.
 
 == Migrating from WPML ==
 
