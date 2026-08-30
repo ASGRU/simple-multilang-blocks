@@ -3,7 +3,7 @@
  * Plugin Name:       Simple Multilang Blocks
  * Plugin URI:        https://github.com/ASGRU/simple-multilang-blocks
  * Description:       A lightweight multilingual layer for block-based WordPress sites.
- * Version:           1.1.5
+ * Version:           1.2.0
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Author:            ASGRU
@@ -15,7 +15,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'SML_VERSION', '1.1.5' );
+define( 'SML_VERSION', '1.2.0' );
 define( 'SML_FILE', __FILE__ );
 define( 'SML_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SML_BASENAME', plugin_basename( __FILE__ ) );

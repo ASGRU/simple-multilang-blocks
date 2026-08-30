@@ -333,14 +333,15 @@ final class SML_Core {
 
         $language = self::get_current_language();
         $meta_query = (array) $query->get( 'meta_query' );
+        $visibility_clause = array( 'key' => '_sml_visible_in', 'value' => $language );
         if ( $language === self::get_default_language() ) {
             $meta_query[] = array(
                 'relation' => 'OR',
-                array( 'key' => '_sml_language', 'value' => $language ),
-                array( 'key' => '_sml_language', 'compare' => 'NOT EXISTS' ),
+                $visibility_clause,
+                array( 'key' => '_sml_visible_in', 'compare' => 'NOT EXISTS' ),
             );
         } else {
-            $meta_query[] = array( 'key' => '_sml_language', 'value' => $language );
+            $meta_query[] = $visibility_clause;
         }
         $query->set( 'meta_query', $meta_query );
     }
@@ -657,21 +658,46 @@ final class SML_Core {
     }
 
     public static function sync_post_translations( $translations ) {
+        $visibility = self::build_visibility_map( $translations );
         foreach ( $translations as $language => $post_id ) {
             if ( $post_id && isset( self::get_languages()[ $language ] ) ) {
                 update_post_meta( $post_id, '_sml_language', $language );
                 update_post_meta( $post_id, '_sml_translations', $translations );
+                delete_post_meta( $post_id, '_sml_visible_in' );
+                foreach ( $visibility[ $post_id ] ?? array() as $visible_language ) {
+                    add_post_meta( $post_id, '_sml_visible_in', $visible_language );
+                }
             }
         }
     }
 
     public static function sync_term_translations( $translations ) {
+        $visibility = self::build_visibility_map( $translations );
         foreach ( $translations as $language => $term_id ) {
             if ( $term_id && isset( self::get_languages()[ $language ] ) ) {
                 update_term_meta( $term_id, '_sml_language', $language );
                 update_term_meta( $term_id, '_sml_translations', $translations );
+                delete_term_meta( $term_id, '_sml_visible_in' );
+                foreach ( $visibility[ $term_id ] ?? array() as $visible_language ) {
+                    add_term_meta( $term_id, '_sml_visible_in', $visible_language );
+                }
             }
         }
+    }
+
+    private static function build_visibility_map( $translations ) {
+        $translations = array_filter( array_map( 'absint', (array) $translations ) );
+        if ( ! $translations ) {
+            return array();
+        }
+        $default = self::get_default_language();
+        $fallback_id = isset( $translations[ $default ] ) ? $translations[ $default ] : reset( $translations );
+        $visibility = array();
+        foreach ( self::get_languages() as $language => $data ) {
+            $object_id = isset( $translations[ $language ] ) ? $translations[ $language ] : $fallback_id;
+            $visibility[ $object_id ][] = $language;
+        }
+        return $visibility;
     }
 
     public function register_settings_page() {
