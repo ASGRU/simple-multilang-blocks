@@ -127,8 +127,9 @@ final class SML_WPML_Migrator {
         if ( ! $dry_run ) {
             update_option( SML_Core::OPTION_POST_TYPES, array_values( $public ) );
             foreach ( $groups_to_sync as $translations ) {
-                SML_Core::sync_post_translations( $translations );
+                SML_Core::sync_post_translations( $translations, false );
             }
+            SML_Core::sync_all_post_hierarchy( $public );
         }
 
         $fallback_posts = $dry_run ? self::count_unmapped_posts( $public ) : self::backfill_unmapped_posts( $public, $default_language );
@@ -163,8 +164,9 @@ final class SML_WPML_Migrator {
         if ( ! $dry_run ) {
             update_option( SML_Core::OPTION_TAXONOMIES, array_values( $taxonomies ) );
             foreach ( $groups as $translations ) {
-                SML_Core::sync_term_translations( $translations );
+                SML_Core::sync_term_translations( $translations, false );
             }
+            SML_Core::sync_all_term_hierarchy( $taxonomies );
         }
 
         $fallback_terms = $dry_run ? self::count_unmapped_terms( $taxonomies ) : self::backfill_unmapped_terms( $taxonomies, $default_language );

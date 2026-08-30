@@ -22,6 +22,7 @@ final class SML_Admin {
         add_action( 'pre_get_posts', array( $this, 'filter_admin_posts' ) );
         add_action( 'admin_post_sml_create_translation', array( $this, 'create_translation' ) );
         add_action( 'admin_post_sml_translate_post', array( $this, 'translate_post' ) );
+        add_action( 'admin_post_sml_retry_translation', array( $this, 'retry_translation' ) );
         add_action( 'admin_post_sml_mark_translation_verified', array( $this, 'mark_translation_verified' ) );
         add_action( 'admin_menu', array( $this, 'register_review_page' ) );
         add_action( 'post_submitbox_misc_actions', array( $this, 'render_review_status' ) );
@@ -123,6 +124,20 @@ final class SML_Admin {
         $this->redirect_from_result( $result, $post_id );
     }
 
+    /** Requeues a failed request; this does not contact a provider in the browser request. */
+    public function retry_translation() {
+        $post_id = $this->request_post_id( 'sml_retry_translation' );
+        $language = $this->request_language();
+        $result = SML_Translation_Service::queue_machine_draft( $post_id, $language );
+        $url = admin_url( 'tools.php?page=sml-translation-review' );
+        if ( is_wp_error( $result ) ) {
+            wp_safe_redirect( add_query_arg( 'sml_retry_error', '1', $url ) );
+            exit;
+        }
+        wp_safe_redirect( add_query_arg( 'sml_requeued', '1', $url ) );
+        exit;
+    }
+
     public function register_review_page() {
         add_management_page(
             __( 'Translation review', 'simple-multilang-blocks' ),
@@ -158,6 +173,8 @@ final class SML_Admin {
         <div class="wrap sml-admin-wrap">
             <h1><?php esc_html_e( 'Translation review', 'simple-multilang-blocks' ); ?></h1>
             <p class="description"><?php esc_html_e( 'Machine translations remain drafts until an editor verifies and publishes them. The queue keeps only request status and never stores source text or API credentials.', 'simple-multilang-blocks' ); ?></p>
+            <?php if ( isset( $_GET['sml_requeued'] ) ) : ?><div class="notice notice-success inline"><p><?php esc_html_e( 'The translation was added to the queue again.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
+            <?php if ( isset( $_GET['sml_retry_error'] ) ) : ?><div class="notice notice-warning inline"><p><?php esc_html_e( 'The translation could not be queued. Check the source, target language and translation provider.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
 
             <h2><?php esc_html_e( 'Requires review', 'simple-multilang-blocks' ); ?></h2>
             <?php if ( $query->have_posts() ) : ?>
@@ -176,7 +193,7 @@ final class SML_Admin {
             <h2><?php esc_html_e( 'Automatic translation queue', 'simple-multilang-blocks' ); ?></h2>
             <?php if ( $jobs ) : ?><table class="widefat striped sml-review-table"><thead><tr><th><?php esc_html_e( 'Source', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Target', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Status', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Attempts', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Updated', 'simple-multilang-blocks' ); ?></th></tr></thead><tbody>
                 <?php foreach ( $jobs as $job ) : $source = get_post( $job['source_post'] ); $target = $job['target_lang']; ?>
-                    <tr><td><?php if ( $source && current_user_can( 'edit_post', $source->ID ) ) : ?><a href="<?php echo esc_url( get_edit_post_link( $source->ID, '' ) ); ?>"><?php echo esc_html( get_the_title( $source ) ); ?></a><?php else : ?>#<?php echo esc_html( $job['source_post'] ); ?><?php endif; ?></td><td><?php echo esc_html( isset( $languages[ $target ] ) ? SML_Core::get_language_flag( $languages[ $target ] ) . ' ' . $languages[ $target ]['name'] : $target ); ?></td><td><span class="sml-job-status is-<?php echo esc_attr( $job['status'] ); ?>"><?php echo esc_html( self::job_status_label( $job['status'] ) ); ?></span><?php if ( 'failed' === $job['status'] ) : ?><br><span class="description"><?php echo esc_html( self::job_error_label( $job['error'] ) ); ?></span><?php endif; ?></td><td><?php echo esc_html( $job['attempts'] ); ?>/<?php echo esc_html( SML_Translation_Service::MAX_ATTEMPTS ); ?></td><td><?php echo esc_html( $job['updated_at'] ?? '' ); ?></td></tr>
+                    <tr><td><?php if ( $source && current_user_can( 'edit_post', $source->ID ) ) : ?><a href="<?php echo esc_url( get_edit_post_link( $source->ID, '' ) ); ?>"><?php echo esc_html( get_the_title( $source ) ); ?></a><?php else : ?>#<?php echo esc_html( $job['source_post'] ); ?><?php endif; ?></td><td><?php echo esc_html( isset( $languages[ $target ] ) ? SML_Core::get_language_flag( $languages[ $target ] ) . ' ' . $languages[ $target ]['name'] : $target ); ?></td><td><span class="sml-job-status is-<?php echo esc_attr( $job['status'] ); ?>"><?php echo esc_html( self::job_status_label( $job['status'] ) ); ?></span><?php if ( 'failed' === $job['status'] ) : ?><br><span class="description"><?php echo esc_html( self::job_error_label( $job['error'] ) ); ?></span><?php if ( $source && current_user_can( 'edit_post', $source->ID ) ) : $retry = wp_nonce_url( add_query_arg( array( 'action' => 'sml_retry_translation', 'post' => $source->ID, 'lang' => $target ), admin_url( 'admin-post.php' ) ), 'sml_retry_translation_' . $source->ID . '_' . $target ); ?><br><a class="button button-small" href="<?php echo esc_url( $retry ); ?>"><?php esc_html_e( 'Queue again', 'simple-multilang-blocks' ); ?></a><?php endif; ?><?php endif; ?></td><td><?php echo esc_html( $job['attempts'] ); ?>/<?php echo esc_html( SML_Translation_Service::MAX_ATTEMPTS ); ?></td><td><?php echo esc_html( $job['updated_at'] ?? '' ); ?></td></tr>
                 <?php endforeach; ?>
                 </tbody></table>
             <?php else : ?><p><?php esc_html_e( 'The queue is empty.', 'simple-multilang-blocks' ); ?></p><?php endif; ?>

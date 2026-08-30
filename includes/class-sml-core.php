@@ -32,6 +32,7 @@ final class SML_Core {
         add_filter( 'query_vars', array( $this, 'register_query_vars' ) );
         add_action( 'parse_request', array( $this, 'route_language_request' ) );
         add_action( 'pre_get_posts', array( $this, 'filter_main_query_language' ), 20 );
+        add_action( 'woocommerce_product_query', array( $this, 'filter_woocommerce_product_query' ), 20 );
 
         add_filter( 'post_link', array( $this, 'filter_post_link' ), 20, 2 );
         add_filter( 'page_link', array( $this, 'filter_page_link' ), 20, 3 );
@@ -406,7 +407,7 @@ final class SML_Core {
     }
 
     public function filter_main_query_language( $query ) {
-        if ( is_admin() || ! $query->is_main_query() || $query->get( 'p' ) || $query->get( 'page_id' ) ) {
+        if ( is_admin() || wp_doing_ajax() || ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) || ! $query->is_main_query() || $query->get( 'p' ) || $query->get( 'page_id' ) ) {
             return;
         }
 
@@ -420,7 +421,26 @@ final class SML_Core {
             return;
         }
 
-        $language = self::get_current_language();
+        self::add_language_visibility_to_query( $query, self::get_current_language() );
+    }
+
+    /**
+     * WooCommerce uses secondary WP_Query instances for related products and
+     * blocks. Keep these public product lists in the active language too, while
+     * leaving cart, checkout, API and admin operations untouched.
+     */
+    public function filter_woocommerce_product_query( $query ) {
+        if ( is_admin() || wp_doing_ajax() || ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) || ! $query instanceof WP_Query || $query->is_main_query() ) {
+            return;
+        }
+        self::add_language_visibility_to_query( $query, self::get_current_language() );
+    }
+
+    private static function add_language_visibility_to_query( $query, $language ) {
+        $language = sanitize_key( $language );
+        if ( ! isset( self::get_languages()[ $language ] ) ) {
+            return;
+        }
         $meta_query = (array) $query->get( 'meta_query' );
         $visibility_clause = array( 'key' => '_sml_visible_in', 'value' => $language );
         if ( $language === self::get_default_language() ) {
@@ -917,7 +937,7 @@ final class SML_Core {
         return is_array( $translations ) ? array_map( 'absint', $translations ) : array();
     }
 
-    public static function sync_post_translations( $translations ) {
+    public static function sync_post_translations( $translations, $sync_hierarchy = true ) {
         $visibility = self::build_visibility_map( $translations );
         foreach ( $translations as $language => $post_id ) {
             if ( $post_id && isset( self::get_languages()[ $language ] ) ) {
@@ -929,9 +949,12 @@ final class SML_Core {
                 }
             }
         }
+        if ( $sync_hierarchy ) {
+            self::sync_post_hierarchy_group( $translations );
+        }
     }
 
-    public static function sync_term_translations( $translations ) {
+    public static function sync_term_translations( $translations, $sync_hierarchy = true ) {
         $visibility = self::build_visibility_map( $translations );
         foreach ( $translations as $language => $term_id ) {
             if ( $term_id && isset( self::get_languages()[ $language ] ) ) {
@@ -943,6 +966,138 @@ final class SML_Core {
                 }
             }
         }
+        if ( $sync_hierarchy ) {
+            self::sync_term_hierarchy_group( $translations );
+        }
+    }
+
+    /**
+     * Keep a translated child page below the translated parent. Linking the
+     * source parent would create a mixed-language permalink, so an untranslated
+     * parent deliberately becomes the root until its own translation exists.
+     */
+    private static function sync_post_hierarchy_group( $translations ) {
+        $reference_id = self::translation_reference_id( $translations );
+        $reference = $reference_id ? get_post( $reference_id ) : false;
+        if ( ! $reference || ! is_post_type_hierarchical( $reference->post_type ) ) {
+            return;
+        }
+        $reference_parent = absint( $reference->post_parent );
+        $parent_translations = $reference_parent ? self::get_post_translations( $reference_parent ) : array();
+        foreach ( (array) $translations as $language => $post_id ) {
+            $post_id = absint( $post_id );
+            $post = $post_id ? get_post( $post_id ) : false;
+            if ( ! $post || $post->post_type !== $reference->post_type ) {
+                continue;
+            }
+            $target_parent = ! empty( $parent_translations[ $language ] ) ? absint( $parent_translations[ $language ] ) : 0;
+            if ( $target_parent && ! get_post( $target_parent ) ) {
+                $target_parent = 0;
+            }
+            if ( absint( $post->post_parent ) !== $target_parent ) {
+                wp_update_post( array( 'ID' => $post_id, 'post_parent' => $target_parent ) );
+            }
+        }
+    }
+
+    /** Applies parent links after a bulk importer has written all page groups. */
+    public static function sync_all_post_hierarchy( $post_types = array() ) {
+        $post_types = $post_types ? (array) $post_types : self::get_post_types();
+        $post_types = array_filter( $post_types, 'is_post_type_hierarchical' );
+        if ( ! $post_types ) {
+            return;
+        }
+        $ids = get_posts(
+            array(
+                'post_type'        => $post_types,
+                'post_status'      => 'any',
+                'posts_per_page'   => -1,
+                'fields'           => 'ids',
+                'suppress_filters' => true,
+                'meta_key'         => '_sml_translations',
+            )
+        );
+        $seen = array();
+        foreach ( $ids as $post_id ) {
+            $translations = self::get_post_translations( $post_id );
+            $key = implode( ':', array_filter( array_map( 'absint', $translations ) ) );
+            if ( ! $key || isset( $seen[ $key ] ) ) {
+                continue;
+            }
+            $seen[ $key ] = true;
+            self::sync_post_hierarchy_group( $translations );
+        }
+    }
+
+    /** Maps hierarchical term parents to their counterpart in the same language. */
+    private static function sync_term_hierarchy_group( $translations ) {
+        $reference_id = self::translation_reference_id( $translations );
+        $reference = $reference_id ? get_term( $reference_id ) : false;
+        if ( ! $reference || is_wp_error( $reference ) ) {
+            return;
+        }
+        $taxonomy = get_taxonomy( $reference->taxonomy );
+        if ( ! $taxonomy || empty( $taxonomy->hierarchical ) ) {
+            return;
+        }
+        $reference_parent = absint( $reference->parent );
+        $parent_translations = $reference_parent ? self::get_term_translations( $reference_parent ) : array();
+        foreach ( (array) $translations as $language => $term_id ) {
+            $term_id = absint( $term_id );
+            $term = $term_id ? get_term( $term_id, $reference->taxonomy ) : false;
+            if ( ! $term || is_wp_error( $term ) ) {
+                continue;
+            }
+            $target_parent = ! empty( $parent_translations[ $language ] ) ? absint( $parent_translations[ $language ] ) : 0;
+            if ( $target_parent && ! get_term( $target_parent, $reference->taxonomy ) ) {
+                $target_parent = 0;
+            }
+            if ( absint( $term->parent ) !== $target_parent ) {
+                wp_update_term( $term_id, $reference->taxonomy, array( 'parent' => $target_parent ) );
+            }
+        }
+    }
+
+    /** Applies term parents after all imported term groups are known. */
+    public static function sync_all_term_hierarchy( $taxonomies = array() ) {
+        $taxonomies = $taxonomies ? (array) $taxonomies : self::get_taxonomies();
+        $taxonomies = array_filter( $taxonomies, static function ( $taxonomy ) {
+            $object = get_taxonomy( $taxonomy );
+            return $object && ! empty( $object->hierarchical );
+        } );
+        if ( ! $taxonomies ) {
+            return;
+        }
+        $ids = get_terms(
+            array(
+                'taxonomy'   => $taxonomies,
+                'hide_empty' => false,
+                'fields'     => 'ids',
+                'meta_query' => array( array( 'key' => '_sml_translations' ) ),
+            )
+        );
+        if ( is_wp_error( $ids ) ) {
+            return;
+        }
+        $seen = array();
+        foreach ( $ids as $term_id ) {
+            $translations = self::get_term_translations( $term_id );
+            $key = implode( ':', array_filter( array_map( 'absint', $translations ) ) );
+            if ( ! $key || isset( $seen[ $key ] ) ) {
+                continue;
+            }
+            $seen[ $key ] = true;
+            self::sync_term_hierarchy_group( $translations );
+        }
+    }
+
+    private static function translation_reference_id( $translations ) {
+        $translations = array_filter( array_map( 'absint', (array) $translations ) );
+        if ( ! $translations ) {
+            return 0;
+        }
+        $default = self::get_default_language();
+        return ! empty( $translations[ $default ] ) ? absint( $translations[ $default ] ) : absint( reset( $translations ) );
     }
 
     private static function build_visibility_map( $translations ) {

@@ -61,3 +61,11 @@ The admin settings select the DeepL Free/Pro endpoint and the OpenAI model name,
 **Settings → Interface strings** can export translations for one language as a PO file and import the same PO format later. This only writes the plugin's own interface-string catalogue; it never replaces a theme or plugin's shipped PO/MO files. Entries marked `fuzzy` import as **Requires review**.
 
 The **Language switcher** block is available in the Block and Site editors. It renders the same current-page links, accessibility labels and theme-aware visual style as `[sml_language_switcher]`; no custom theme PHP is required.
+
+## URLs, hierarchy and retries
+
+When a linked hierarchical page or category has a translated parent, Simple Multilang keeps that relationship in the same language. If the parent has not been translated yet, the child stays at the language root instead of creating a mixed-language URL; the relation is restored automatically once both counterparts are linked. WPML imports reconcile all known page and term hierarchies after their translation groups are imported.
+
+Failed automatic translations can be queued again from **Tools → Translation review**. Requeuing does not contact DeepL or OpenAI in the browser request; it restarts the same bounded background process.
+
+WooCommerce product lists—including related-product and block queries—follow the active language. Cart, checkout, account, REST and other administrative/service requests are not filtered by the multilingual layer.

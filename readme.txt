@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.3
+Stable tag: 1.4.1
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -15,7 +15,11 @@ A lightweight multilingual layer for block-based WordPress sites.
 * Language-prefixed URLs, a styled automatic/shortcode language switcher and hreflang tags.
 * WPML migration for content relationships and String Translation entries.
 * Public-interface string screen for the active theme and selected plugins.
-* Manual draft creation and editor-triggered DeepL/OpenAI translations, always marked for review.
+* Manual draft creation and editor-triggered DeepL/OpenAI translations through a bounded background queue, always marked for review.
+* Translation Review workspace with queue status and safe retry for a failed provider request.
+* PO import/export for the plugin's editable public-interface string catalogue.
+* Gutenberg Language Switcher block, alongside the automatic and shortcode variants.
+* WooCommerce product and related-product lists follow the active language without affecting checkout, account, REST or admin requests.
 * WordPress update notifications from signed GitHub Release assets.
 
 == Updating from GitHub ==
@@ -40,15 +44,15 @@ or
 
 Optional: `define( 'SML_OPENAI_MODEL', 'gpt-5-mini' );`
 
-The plugin never sends content to a provider until an editor presses **Auto-translate**. Successful results are linked drafts with a **Requires review** marker; they are never published automatically. If a provider is unavailable, no draft is created and no frontend error is shown.
+The plugin never sends content to a provider until an editor queues a translation. The request runs through a small WordPress background queue and retries a temporary provider problem up to three times. Successful results are linked drafts with a **Requires review** marker; they are never published automatically. Failed jobs can be queued again from **Tools → Translation review**. If a provider is unavailable, no draft is created and no frontend error is shown.
 
 == Interface strings ==
 
-Open **Settings → Interface strings** to edit strings from the active theme and selected active plugins. POT catalogues are scanned where available; otherwise a selected plugin's visible public strings are captured using the text WordPress already displays. The plugin applies these values only to the public interface through standard gettext filters; it does not modify theme/plugin source, PO or MO files.
+Open **Settings → Interface strings** to edit strings from the active theme and selected active plugins. POT catalogues are scanned where available; otherwise a selected plugin's visible public strings are captured using the text WordPress already displays. The editable catalogue can be exported and imported as PO. The plugin applies these values only to the public interface through standard gettext filters; it does not modify theme/plugin source, PO or MO files.
 
 == Language switcher ==
 
-The switcher can be automatic or shortcode-only. Its appearance is stored per active theme: theme colours, light, dark or minimal. Add a theme-specific CSS class when a project needs its own styling layer.
+The switcher can be automatic or shortcode-only, and is also available as a Gutenberg block. Its appearance is stored per active theme: theme colours, light, dark or minimal. Add a theme-specific CSS class when a project needs its own styling layer.
 
 == License ==
 
@@ -56,6 +60,6 @@ GPL-2.0-or-later. This plugin is free software: you may use, study, modify and r
 
 == Migrating from WPML ==
 
-Take a database backup. In the plugin settings use **Import WPML data**, or run `wp sml migrate_wpml --dry-run` followed by `wp sml migrate_wpml --yes`.
+Take a database backup. In the plugin settings run **Migration preflight** first, then use **Import WPML data**, or run `wp sml migrate_wpml --dry-run` followed by `wp sml migrate_wpml --yes`.
 
-The importer does not delete WPML tables, settings or plugin files. It recreates relationships only where WPML has a real multi-language translation group; standalone records remain language-labelled and are never guessed into a relationship. Verify representative pages, product categories and translated interface strings before removing WPML from disk.
+The importer does not delete WPML tables, settings or plugin files. It recreates relationships only where WPML has a real multi-language translation group; standalone records remain language-labelled and are never guessed into a relationship. Hierarchical page and term parents are reconciled only with their linked counterpart, preventing mixed-language URLs. Verify representative pages, product categories and translated interface strings before removing WPML from disk.
