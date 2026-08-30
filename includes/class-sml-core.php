@@ -33,6 +33,7 @@ final class SML_Core {
         add_filter( 'term_link', array( $this, 'filter_term_link' ), 20, 3 );
         add_filter( 'language_attributes', array( $this, 'filter_language_attributes' ), 20, 2 );
         add_action( 'wp_head', array( $this, 'output_hreflang' ), 1 );
+        add_filter( 'redirect_canonical', array( $this, 'prevent_language_canonical_redirect' ), 10, 2 );
         add_action( 'template_redirect', array( $this, 'redirect_noncanonical_language_url' ), 1 );
         add_shortcode( 'sml_language_switcher', array( $this, 'language_switcher_shortcode' ) );
 
@@ -413,6 +414,30 @@ final class SML_Core {
         $code = $languages[ $language ]['code'];
         $direction = preg_match( '/^(ar|fa|he|ur)(-|$)/i', $code ) ? 'rtl' : 'ltr';
         return sprintf( 'lang="%s" dir="%s"', esc_attr( $code ), esc_attr( $direction ) );
+    }
+
+    public function prevent_language_canonical_redirect( $redirect_url, $requested_url ) {
+        if ( get_query_var( 'sml_language' ) ) {
+            return false;
+        }
+
+        $path = wp_parse_url( $requested_url, PHP_URL_PATH );
+        if ( ! is_string( $path ) || '' === $path ) {
+            return $redirect_url;
+        }
+
+        $home_path = (string) wp_parse_url( home_url( '/' ), PHP_URL_PATH );
+        if ( '/' !== $home_path && 0 === strpos( $path, $home_path ) ) {
+            $path = substr( $path, strlen( $home_path ) );
+        }
+
+        $slug = sanitize_key( strtok( trim( $path, '/' ), '/' ) );
+        $languages = self::get_languages();
+        if ( $slug && isset( $languages[ $slug ] ) && $slug !== self::get_default_language() ) {
+            return false;
+        }
+
+        return $redirect_url;
     }
 
     public function redirect_noncanonical_language_url() {
