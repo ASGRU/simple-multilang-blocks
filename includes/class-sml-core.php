@@ -47,6 +47,7 @@ final class SML_Core {
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_assets' ) );
         add_action( 'wp_body_open', array( $this, 'render_automatic_switcher' ), 20 );
         add_action( 'wp_footer', array( $this, 'render_automatic_switcher_fallback' ), 1 );
+        add_action( 'init', array( $this, 'register_blocks' ), 20 );
 
         if ( ! defined( 'ICL_SITEPRESS_VERSION' ) && ! class_exists( 'SitePress' ) ) {
             add_filter( 'wpml_current_language', array( $this, 'compat_current_language' ) );
@@ -59,6 +60,7 @@ final class SML_Core {
 
         add_action( 'admin_menu', array( $this, 'register_settings_page' ) );
         add_action( 'admin_post_sml_save_settings', array( $this, 'save_settings' ) );
+        add_action( 'admin_post_sml_preview_wpml', array( $this, 'preview_wpml' ) );
         add_action( 'admin_post_sml_import_wpml', array( $this, 'import_wpml' ) );
     }
 
@@ -86,6 +88,9 @@ final class SML_Core {
     }
 
     public static function deactivate() {
+        if ( class_exists( 'SML_Translation_Service' ) ) {
+            SML_Translation_Service::clear_scheduled_jobs();
+        }
         flush_rewrite_rules();
     }
 
@@ -707,6 +712,30 @@ final class SML_Core {
         wp_enqueue_style( 'simple-multilang-blocks', plugins_url( 'assets/css/sml-frontend.css', SML_FILE ), array(), SML_VERSION );
     }
 
+    /** Makes the switcher available in the Site Editor without theme code. */
+    public function register_blocks() {
+        if ( ! function_exists( 'register_block_type' ) ) {
+            return;
+        }
+        wp_register_style( 'simple-multilang-blocks-editor', plugins_url( 'assets/css/sml-frontend.css', SML_FILE ), array(), SML_VERSION );
+        register_block_type(
+            SML_DIR . 'blocks/language-switcher',
+            array( 'render_callback' => array( $this, 'render_language_switcher_block' ) )
+        );
+    }
+
+    public function render_language_switcher_block( $attributes ) {
+        $attributes = is_array( $attributes ) ? $attributes : array();
+        return $this->language_switcher_shortcode(
+            array(
+                'style'      => isset( $attributes['style'] ) ? sanitize_key( $attributes['style'] ) : 'dropdown',
+                'appearance' => isset( $attributes['appearance'] ) ? sanitize_key( $attributes['appearance'] ) : '',
+                'show_name'  => empty( $attributes['showName'] ) ? '0' : '1',
+                'class'      => isset( $attributes['className'] ) ? sanitize_html_class( $attributes['className'] ) : '',
+            )
+        );
+    }
+
     public function render_automatic_switcher() {
         if ( 'automatic' !== get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) || is_admin() ) {
             return;
@@ -766,9 +795,14 @@ final class SML_Core {
             <?php elseif ( $slug !== $current ) :
                 $manual_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_create_translation', 'post' => $post->ID, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_create_translation_' . $post->ID . '_' . $slug );
                 $machine_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_translate_post', 'post' => $post->ID, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_translate_post_' . $post->ID . '_' . $slug );
+                $job = class_exists( 'SML_Translation_Service' ) ? SML_Translation_Service::get_job( $post->ID, $slug ) : array();
             ?>
                 <a class="button button-small" href="<?php echo esc_url( $manual_url ); ?>"><?php esc_html_e( 'Create draft', 'simple-multilang-blocks' ); ?></a>
-                <a class="button button-small button-secondary" href="<?php echo esc_url( $machine_url ); ?>"><?php esc_html_e( 'Auto-translate', 'simple-multilang-blocks' ); ?></a>
+                <?php if ( $job && in_array( $job['status'], array( 'queued', 'processing', 'retry' ), true ) ) : ?>
+                    <span class="sml-review-badge"><?php esc_html_e( 'Automatic translation queued', 'simple-multilang-blocks' ); ?></span>
+                <?php else : ?>
+                    <a class="button button-small button-secondary" href="<?php echo esc_url( $machine_url ); ?>"><?php esc_html_e( 'Queue automatic translation', 'simple-multilang-blocks' ); ?></a>
+                <?php endif; ?>
             <?php endif; ?></p>
         <?php endforeach; ?>
         <details><summary><?php esc_html_e( 'Link an existing translation by ID', 'simple-multilang-blocks' ); ?></summary><p class="description"><?php esc_html_e( 'Use this only when the translation already exists. IDs must have the same content type.', 'simple-multilang-blocks' ); ?></p><?php foreach ( $languages as $slug => $data ) : ?><p><label><?php echo esc_html( $data['name'] ); ?><input class="widefat" min="1" type="number" name="sml_translations[<?php echo esc_attr( $slug ); ?>]" value="<?php echo esc_attr( isset( $translations[ $slug ] ) ? (int) $translations[ $slug ] : '' ); ?>"></label></p><?php endforeach; ?></details>
@@ -940,6 +974,7 @@ final class SML_Core {
         $presets = self::language_presets();
         $plugin_domains = SML_Theme_Strings::available_plugin_domains();
         $selected_plugin_domains = SML_Theme_Strings::selected_plugin_domains();
+        $wpml_preview = get_transient( $this->wpml_preview_key() );
         ?>
         <div class="wrap sml-admin-wrap"><h1><?php esc_html_e( 'Simple Multilang settings', 'simple-multilang-blocks' ); ?></h1>
         <?php if ( isset( $_GET['updated'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Settings saved. Rewrite rules were refreshed.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
@@ -972,10 +1007,19 @@ final class SML_Core {
         <?php if ( $plugin_domains ) : foreach ( $plugin_domains as $domain => $plugin ) : ?><label><input type="checkbox" name="sml_interface_plugin_domains[]" value="<?php echo esc_attr( $domain ); ?>" <?php checked( in_array( $domain, $selected_plugin_domains, true ) ); ?>> <?php echo esc_html( $plugin['name'] . ' (' . $domain . ')' ); ?></label><?php endforeach; else : ?><span class="description"><?php esc_html_e( 'No eligible active plugins were found.', 'simple-multilang-blocks' ); ?></span><?php endif; ?>
         </div>
         <h2><?php esc_html_e( 'Language switcher', 'simple-multilang-blocks' ); ?></h2><p><label><input type="radio" name="sml_switcher_placement" value="automatic" <?php checked( 'automatic', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Show a floating switcher automatically', 'simple-multilang-blocks' ); ?></label><br><label><input type="radio" name="sml_switcher_placement" value="shortcode" <?php checked( 'shortcode', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Use shortcode only', 'simple-multilang-blocks' ); ?></label></p><p><label><?php esc_html_e( 'Appearance for this theme', 'simple-multilang-blocks' ); ?> <select name="sml_switcher_appearance"><option value="theme" <?php selected( 'theme', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Use theme colors', 'simple-multilang-blocks' ); ?></option><option value="light" <?php selected( 'light', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Light', 'simple-multilang-blocks' ); ?></option><option value="dark" <?php selected( 'dark', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Dark', 'simple-multilang-blocks' ); ?></option><option value="minimal" <?php selected( 'minimal', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Minimal', 'simple-multilang-blocks' ); ?></option></select></label> <label><?php esc_html_e( 'Theme-specific CSS class', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_switcher_custom_class" value="<?php echo esc_attr( self::get_switcher_custom_class() ); ?>" placeholder="my-theme-language-switcher"></label></p><p class="description"><code>[sml_language_switcher style="dropdown"]</code> <?php esc_html_e( 'inherits this theme setting; use appearance="light" or another appearance in a shortcode when needed.', 'simple-multilang-blocks' ); ?></p>
-        <h2><?php esc_html_e( 'Automatic translation', 'simple-multilang-blocks' ); ?></h2><p><label><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?> <select name="sml_translation_provider"><option value="" <?php selected( '', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'Disabled', 'simple-multilang-blocks' ); ?></option><option value="deepl" <?php selected( 'deepl', SML_Translation_Service::provider() ); ?>>DeepL</option><option value="openai" <?php selected( 'openai', SML_Translation_Service::provider() ); ?>>OpenAI</option></select></label></p><p><label><?php esc_html_e( 'OpenAI model', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_openai_model" value="<?php echo esc_attr( get_option( SML_Translation_Service::OPTION_OPENAI_MODEL, 'gpt-5-mini' ) ); ?>"></label></p><p><label><?php esc_html_e( 'DeepL endpoint', 'simple-multilang-blocks' ); ?> <select name="sml_deepl_endpoint"><option value="free" <?php selected( 'free', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api-free.deepl.com</option><option value="pro" <?php selected( 'pro', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api.deepl.com</option></select></label></p><div class="notice notice-info inline"><p><?php esc_html_e( 'API keys are never stored in WordPress. Add either SML_DEEPL_API_KEY or SML_OPENAI_API_KEY to wp-config.php. Generated content is always a draft marked “Requires review”; if the service is unavailable, no draft is created and no public-page error is shown.', 'simple-multilang-blocks' ); ?></p></div>
+        <h2><?php esc_html_e( 'Automatic translation', 'simple-multilang-blocks' ); ?></h2><p><label><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?> <select name="sml_translation_provider"><option value="" <?php selected( '', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'Disabled', 'simple-multilang-blocks' ); ?></option><option value="deepl" <?php selected( 'deepl', SML_Translation_Service::provider() ); ?>>DeepL</option><option value="openai" <?php selected( 'openai', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'OpenAI / ChatGPT', 'simple-multilang-blocks' ); ?></option></select></label></p><p><label><?php esc_html_e( 'OpenAI model', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_openai_model" value="<?php echo esc_attr( get_option( SML_Translation_Service::OPTION_OPENAI_MODEL, 'gpt-5-mini' ) ); ?>"></label></p><p><label><?php esc_html_e( 'DeepL endpoint', 'simple-multilang-blocks' ); ?> <select name="sml_deepl_endpoint"><option value="free" <?php selected( 'free', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api-free.deepl.com</option><option value="pro" <?php selected( 'pro', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api.deepl.com</option></select></label></p><div class="notice notice-info inline"><p><?php esc_html_e( 'API keys are never stored in WordPress. Add either SML_DEEPL_API_KEY or SML_OPENAI_API_KEY to wp-config.php. Generated content is always a draft marked “Requires review”; if the service is unavailable, no draft is created and no public-page error is shown.', 'simple-multilang-blocks' ); ?></p></div>
         <p><button class="button button-primary"><?php esc_html_e( 'Save settings', 'simple-multilang-blocks' ); ?></button></p></form>
         <hr><h2><?php esc_html_e( 'WPML migration', 'simple-multilang-blocks' ); ?></h2><p><?php esc_html_e( 'Imports active languages, selected posts, selected taxonomies and String Translation values. It never deletes WPML tables or options.', 'simple-multilang-blocks' ); ?></p>
-        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_import_wpml' ); ?><input type="hidden" name="action" value="sml_import_wpml"><label><input required type="checkbox" name="sml_import_confirm" value="1"> <?php esc_html_e( 'I have a database backup and want to import now.', 'simple-multilang-blocks' ); ?></label><p><button class="button"> <?php esc_html_e( 'Import WPML data', 'simple-multilang-blocks' ); ?></button></p></form></div>
+        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_preview_wpml' ); ?><input type="hidden" name="action" value="sml_preview_wpml"><p><button class="button button-secondary"> <?php esc_html_e( 'Run migration preflight', 'simple-multilang-blocks' ); ?></button></p></form>
+        <?php if ( is_array( $wpml_preview ) && ! empty( $wpml_preview['error'] ) ) : ?><div class="notice notice-error inline"><p><?php echo esc_html( $wpml_preview['error'] ); ?></p></div><?php elseif ( is_array( $wpml_preview ) && ! empty( $wpml_preview['result'] ) && is_array( $wpml_preview['result'] ) ) : $preview = $wpml_preview['result']; ?>
+            <div class="notice notice-info inline"><p><strong><?php esc_html_e( 'Preflight complete.', 'simple-multilang-blocks' ); ?></strong> <?php esc_html_e( 'Nothing was changed. Review the relationship counts before importing.', 'simple-multilang-blocks' ); ?></p><ul class="sml-migration-summary">
+                <li><?php echo esc_html( sprintf( __( 'Languages: %d', 'simple-multilang-blocks' ), absint( $preview['languages'] ?? 0 ) ) ); ?></li>
+                <li><?php echo esc_html( sprintf( __( 'Post groups: %1$d (%2$d linked, %3$d single-language)', 'simple-multilang-blocks' ), absint( $preview['post_groups'] ?? 0 ), absint( $preview['linked_post_groups'] ?? 0 ), absint( $preview['unlinked_post_groups'] ?? 0 ) ) ); ?></li>
+                <li><?php echo esc_html( sprintf( __( 'Term groups: %1$d (%2$d linked, %3$d single-language)', 'simple-multilang-blocks' ), absint( $preview['term_groups'] ?? 0 ), absint( $preview['linked_term_groups'] ?? 0 ), absint( $preview['unlinked_term_groups'] ?? 0 ) ) ); ?></li>
+                <li><?php echo esc_html( sprintf( __( 'Interface strings: %1$d (%2$d translations)', 'simple-multilang-blocks' ), absint( $preview['strings'] ?? 0 ), absint( $preview['string_translations'] ?? 0 ) ) ); ?></li>
+            </ul><p class="description"><?php esc_html_e( 'Single-language groups receive their language label but are never guessed into a translation relationship.', 'simple-multilang-blocks' ); ?></p></div>
+        <?php endif; ?>
+        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_import_wpml' ); ?><input type="hidden" name="action" value="sml_import_wpml"><label><input required type="checkbox" name="sml_import_confirm" value="1"> <?php esc_html_e( 'I took a database backup and reviewed the preflight report.', 'simple-multilang-blocks' ); ?></label><p><button class="button" <?php disabled( ! is_array( $wpml_preview ) || empty( $wpml_preview['result'] ) ); ?>> <?php esc_html_e( 'Import WPML data', 'simple-multilang-blocks' ); ?></button></p></form></div>
         <?php
     }
 
@@ -1036,10 +1080,40 @@ final class SML_Core {
         if ( empty( $_POST['sml_import_confirm'] ) ) {
             wp_die( esc_html__( 'Confirm the import after taking a database backup.', 'simple-multilang-blocks' ) );
         }
-        SML_WPML_Migrator::run( false );
+        $preview = get_transient( $this->wpml_preview_key() );
+        if ( ! is_array( $preview ) || empty( $preview['result'] ) ) {
+            wp_die( esc_html__( 'Run the WPML migration preflight and review its results before importing.', 'simple-multilang-blocks' ) );
+        }
+        try {
+            SML_WPML_Migrator::run( false );
+        } catch ( Throwable $error ) {
+            set_transient( $this->wpml_preview_key(), array( 'error' => __( 'The WPML migration could not be completed. No WPML data was deleted; review the preflight and database connection, then try again.', 'simple-multilang-blocks' ) ), 10 * MINUTE_IN_SECONDS );
+            wp_safe_redirect( add_query_arg( 'wpml_import_failed', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
+            exit;
+        }
         self::schedule_rewrite_flush();
+        delete_transient( $this->wpml_preview_key() );
         wp_safe_redirect( add_query_arg( 'imported', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
         exit;
+    }
+
+    public function preview_wpml() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You are not allowed to inspect migration data.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( 'sml_preview_wpml' );
+        try {
+            $preview = array( 'result' => SML_WPML_Migrator::run( true ) );
+        } catch ( Throwable $error ) {
+            $preview = array( 'error' => __( 'WPML tables could not be inspected. No data was changed.', 'simple-multilang-blocks' ) );
+        }
+        set_transient( $this->wpml_preview_key(), $preview, 30 * MINUTE_IN_SECONDS );
+        wp_safe_redirect( add_query_arg( 'wpml_preflight', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
+        exit;
+    }
+
+    private function wpml_preview_key() {
+        return 'sml_wpml_preflight_' . get_current_user_id();
     }
 
     private static function sanitize_languages( $languages ) {

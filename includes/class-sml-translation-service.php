@@ -12,6 +12,15 @@ final class SML_Translation_Service {
     const OPTION_PROVIDER       = 'sml_translation_provider';
     const OPTION_OPENAI_MODEL   = 'sml_openai_model';
     const OPTION_DEEPL_ENDPOINT = 'sml_deepl_endpoint';
+    const OPTION_JOBS           = 'sml_translation_jobs';
+    const CRON_HOOK             = 'sml_process_translation_job';
+    const MAX_ATTEMPTS          = 3;
+    const MAX_STORED_JOBS       = 100;
+
+    /** Register the deliberately small, WordPress-native background queue. */
+    public static function init() {
+        add_action( self::CRON_HOOK, array( __CLASS__, 'process_queued_job' ), 10, 2 );
+    }
 
     public static function provider() {
         $provider = (string) get_option( self::OPTION_PROVIDER, '' );
@@ -51,24 +60,63 @@ final class SML_Translation_Service {
     }
 
     /**
-     * Generates a linked draft. The provider is contacted before a draft is
-     * created, so an unavailable provider never leaves an unwanted duplicate.
+     * Adds a translation request to a persistent, retryable queue. No visitor
+     * request ever waits for a remote provider, and the queue stores metadata
+     * only—never the source text or API credentials.
+     *
+     * @return array|WP_Error
+     */
+    public static function queue_machine_draft( $source_post_id, $target_language ) {
+        $validation = self::validate_machine_request( $source_post_id, $target_language );
+        if ( is_wp_error( $validation ) ) {
+            return $validation;
+        }
+        if ( ! self::is_available() ) {
+            return new WP_Error( 'sml_provider_unavailable', __( 'The selected translation service is unavailable. No draft was created; you can create a manual draft instead.', 'simple-multilang-blocks' ) );
+        }
+
+        $source_post_id = absint( $source_post_id );
+        $target_language = sanitize_key( $target_language );
+        $job_id = self::job_id( $source_post_id, $target_language );
+        $jobs = self::get_jobs();
+        if ( ! empty( $jobs[ $job_id ] ) && in_array( $jobs[ $job_id ]['status'], array( 'queued', 'processing', 'retry' ), true ) ) {
+            return $jobs[ $job_id ];
+        }
+
+        $jobs[ $job_id ] = array(
+            'job_id'       => $job_id,
+            'source_post'  => $source_post_id,
+            'target_lang'  => $target_language,
+            'status'       => 'queued',
+            'attempts'     => 0,
+            'created_at'   => current_time( 'mysql', true ),
+            'updated_at'   => current_time( 'mysql', true ),
+            'scheduled_at' => gmdate( 'Y-m-d H:i:s', time() + 5 ),
+            'actor'        => get_current_user_id(),
+            'error'        => '',
+        );
+        self::save_jobs( $jobs );
+        self::schedule_job( $source_post_id, $target_language, time() + 5 );
+
+        return $jobs[ $job_id ];
+    }
+
+    /**
+     * Generates a linked draft immediately. This remains available to CLI and
+     * integrations; editor actions use queue_machine_draft() instead.
      *
      * @return int|WP_Error
      */
     public static function create_machine_draft( $source_post_id, $target_language ) {
+        $validation = self::validate_machine_request( $source_post_id, $target_language );
+        if ( is_wp_error( $validation ) ) {
+            return $validation;
+        }
+
         $source_post_id = absint( $source_post_id );
         $target_language = sanitize_key( $target_language );
         $source = get_post( $source_post_id );
-
-        if ( ! $source || ! in_array( $source->post_type, SML_Core::get_post_types(), true ) ) {
-            return new WP_Error( 'sml_source_missing', __( 'The source content is unavailable.', 'simple-multilang-blocks' ) );
-        }
-
         $source_language = SML_Core::get_post_language( $source_post_id );
-        if ( $source_language === $target_language ) {
-            return new WP_Error( 'sml_same_language', __( 'Choose a different target language.', 'simple-multilang-blocks' ) );
-        }
 
         $translated = self::translate_fields(
             array(
@@ -85,6 +133,181 @@ final class SML_Translation_Service {
         }
 
         return self::create_draft( $source_post_id, $target_language, $translated, self::provider() );
+    }
+
+    /**
+     * Runs one queued request. Failed provider calls are retried with bounded
+     * backoff. A hard failure is kept for the editor to inspect, without a
+     * frontend message or a duplicate draft.
+     */
+    public static function process_queued_job( $source_post_id, $target_language ) {
+        $source_post_id = absint( $source_post_id );
+        $target_language = sanitize_key( $target_language );
+        $job_id = self::job_id( $source_post_id, $target_language );
+        $jobs = self::get_jobs();
+        if ( empty( $jobs[ $job_id ] ) || ! in_array( $jobs[ $job_id ]['status'], array( 'queued', 'retry', 'processing' ), true ) ) {
+            return;
+        }
+
+        $lock_key = 'sml_translation_lock_' . md5( $job_id );
+        if ( get_transient( $lock_key ) ) {
+            self::schedule_job( $source_post_id, $target_language, time() + MINUTE_IN_SECONDS );
+            return;
+        }
+        set_transient( $lock_key, 1, 5 * MINUTE_IN_SECONDS );
+
+        $jobs[ $job_id ]['status'] = 'processing';
+        $jobs[ $job_id ]['updated_at'] = current_time( 'mysql', true );
+        self::save_jobs( $jobs );
+
+        try {
+            $result = self::create_machine_draft( $source_post_id, $target_language );
+        } catch ( Throwable $error ) {
+            $result = new WP_Error( 'sml_translation_exception', __( 'The translation service could not complete this request.', 'simple-multilang-blocks' ) );
+        }
+
+        $jobs = self::get_jobs();
+        if ( empty( $jobs[ $job_id ] ) ) {
+            delete_transient( $lock_key );
+            return;
+        }
+        $jobs[ $job_id ]['updated_at'] = current_time( 'mysql', true );
+
+        if ( ! is_wp_error( $result ) ) {
+            $jobs[ $job_id ]['status'] = 'completed';
+            $jobs[ $job_id ]['translation_post'] = absint( $result );
+            $jobs[ $job_id ]['error'] = '';
+            unset( $jobs[ $job_id ]['scheduled_at'] );
+            self::save_jobs( $jobs );
+            delete_transient( $lock_key );
+            return;
+        }
+
+        if ( 'sml_translation_exists' === $result->get_error_code() ) {
+            $data = $result->get_error_data();
+            $jobs[ $job_id ]['status'] = 'completed';
+            $jobs[ $job_id ]['translation_post'] = ! empty( $data['post_id'] ) ? absint( $data['post_id'] ) : 0;
+            $jobs[ $job_id ]['error'] = '';
+            unset( $jobs[ $job_id ]['scheduled_at'] );
+            self::save_jobs( $jobs );
+            delete_transient( $lock_key );
+            return;
+        }
+
+        $jobs[ $job_id ]['attempts'] = absint( $jobs[ $job_id ]['attempts'] ) + 1;
+        $jobs[ $job_id ]['error'] = sanitize_key( $result->get_error_code() );
+        if ( self::is_retryable_error( $result ) && $jobs[ $job_id ]['attempts'] < self::MAX_ATTEMPTS ) {
+            $delay = min( 20 * MINUTE_IN_SECONDS, 5 * MINUTE_IN_SECONDS * ( 1 << ( $jobs[ $job_id ]['attempts'] - 1 ) ) );
+            $jobs[ $job_id ]['status'] = 'retry';
+            $jobs[ $job_id ]['scheduled_at'] = gmdate( 'Y-m-d H:i:s', time() + $delay );
+            self::save_jobs( $jobs );
+            self::schedule_job( $source_post_id, $target_language, time() + $delay );
+        } else {
+            $jobs[ $job_id ]['status'] = 'failed';
+            unset( $jobs[ $job_id ]['scheduled_at'] );
+            self::save_jobs( $jobs );
+        }
+        delete_transient( $lock_key );
+    }
+
+    /** @return array<string,array> */
+    public static function get_jobs( $statuses = array() ) {
+        $jobs = get_option( self::OPTION_JOBS, array() );
+        if ( ! is_array( $jobs ) ) {
+            return array();
+        }
+        $statuses = array_filter( array_map( 'sanitize_key', (array) $statuses ) );
+        foreach ( $jobs as $job_id => $job ) {
+            if ( ! is_array( $job ) || empty( $job['source_post'] ) || empty( $job['target_lang'] ) || empty( $job['status'] ) ) {
+                unset( $jobs[ $job_id ] );
+                continue;
+            }
+            $jobs[ $job_id ]['job_id'] = (string) $job_id;
+            $jobs[ $job_id ]['source_post'] = absint( $job['source_post'] );
+            $jobs[ $job_id ]['target_lang'] = sanitize_key( $job['target_lang'] );
+            $jobs[ $job_id ]['status'] = sanitize_key( $job['status'] );
+            $jobs[ $job_id ]['attempts'] = absint( $job['attempts'] ?? 0 );
+            $jobs[ $job_id ]['error'] = sanitize_key( $job['error'] ?? '' );
+            if ( $statuses && ! in_array( $jobs[ $job_id ]['status'], $statuses, true ) ) {
+                unset( $jobs[ $job_id ] );
+            }
+        }
+        uasort( $jobs, static function ( $left, $right ) {
+            return strcmp( (string) ( $right['updated_at'] ?? '' ), (string) ( $left['updated_at'] ?? '' ) );
+        } );
+        return $jobs;
+    }
+
+    public static function get_job( $source_post_id, $target_language ) {
+        $jobs = self::get_jobs();
+        $job_id = self::job_id( $source_post_id, $target_language );
+        return isset( $jobs[ $job_id ] ) ? $jobs[ $job_id ] : array();
+    }
+
+    public static function clear_scheduled_jobs() {
+        wp_clear_scheduled_hook( self::CRON_HOOK );
+    }
+
+    private static function validate_machine_request( $source_post_id, $target_language ) {
+        $source_post_id = absint( $source_post_id );
+        $target_language = sanitize_key( $target_language );
+        $source = get_post( $source_post_id );
+        $languages = SML_Core::get_languages();
+        if ( ! $source || ! in_array( $source->post_type, SML_Core::get_post_types(), true ) ) {
+            return new WP_Error( 'sml_source_missing', __( 'The source content is unavailable.', 'simple-multilang-blocks' ) );
+        }
+        if ( ! isset( $languages[ $target_language ] ) || SML_Core::get_post_language( $source_post_id ) === $target_language ) {
+            return new WP_Error( 'sml_invalid_language', __( 'Choose a different valid target language.', 'simple-multilang-blocks' ) );
+        }
+        $translations = SML_Core::get_post_translations( $source_post_id );
+        if ( ! empty( $translations[ $target_language ] ) ) {
+            return new WP_Error( 'sml_translation_exists', __( 'A translation already exists for this language.', 'simple-multilang-blocks' ), array( 'post_id' => absint( $translations[ $target_language ] ) ) );
+        }
+        return true;
+    }
+
+    private static function job_id( $source_post_id, $target_language ) {
+        return absint( $source_post_id ) . ':' . sanitize_key( $target_language );
+    }
+
+    private static function schedule_job( $source_post_id, $target_language, $timestamp ) {
+        $args = array( absint( $source_post_id ), sanitize_key( $target_language ) );
+        if ( ! wp_next_scheduled( self::CRON_HOOK, $args ) ) {
+            wp_schedule_single_event( max( time() + 1, absint( $timestamp ) ), self::CRON_HOOK, $args );
+        }
+    }
+
+    private static function is_retryable_error( $error ) {
+        if ( ! is_wp_error( $error ) ) {
+            return false;
+        }
+        return in_array( $error->get_error_code(), array(
+            'sml_provider_unavailable',
+            'sml_deepl_connection',
+            'sml_deepl_response',
+            'sml_deepl_incomplete',
+            'sml_openai_connection',
+            'sml_openai_response',
+            'sml_openai_invalid',
+            'sml_translation_exception',
+        ), true );
+    }
+
+    private static function save_jobs( $jobs ) {
+        $jobs = is_array( $jobs ) ? $jobs : array();
+        $cutoff = gmdate( 'Y-m-d H:i:s', time() - 30 * DAY_IN_SECONDS );
+        foreach ( $jobs as $job_id => $job ) {
+            if ( in_array( $job['status'] ?? '', array( 'completed', 'failed' ), true ) && ! empty( $job['updated_at'] ) && $job['updated_at'] < $cutoff ) {
+                unset( $jobs[ $job_id ] );
+            }
+        }
+        uasort( $jobs, static function ( $left, $right ) {
+            return strcmp( (string) ( $right['updated_at'] ?? '' ), (string) ( $left['updated_at'] ?? '' ) );
+        } );
+        if ( count( $jobs ) > self::MAX_STORED_JOBS ) {
+            $jobs = array_slice( $jobs, 0, self::MAX_STORED_JOBS, true );
+        }
+        update_option( self::OPTION_JOBS, $jobs, false );
     }
 
     /**

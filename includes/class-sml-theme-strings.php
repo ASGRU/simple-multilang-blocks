@@ -29,6 +29,8 @@ final class SML_Theme_Strings {
         add_action( 'admin_menu', array( $this, 'register_page' ) );
         add_action( 'admin_post_sml_scan_theme_strings', array( $this, 'scan_theme_strings' ) );
         add_action( 'admin_post_sml_save_theme_strings', array( $this, 'save_theme_strings' ) );
+        add_action( 'admin_post_sml_export_po', array( $this, 'export_po' ) );
+        add_action( 'admin_post_sml_import_po', array( $this, 'import_po' ) );
     }
 
     public static function available_plugin_domains() {
@@ -193,6 +195,8 @@ final class SML_Theme_Strings {
             <p class="description"><?php esc_html_e( 'Strings come from the active theme, selected plugins and imported WPML String Translation records. Their existing source text is retained as a fallback; translations apply only to the public site interface and never modify source, PO or MO files.', 'simple-multilang-blocks' ); ?></p>
             <?php if ( isset( $_GET['scanned'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Theme and selected plugin strings were catalogued.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
             <?php if ( isset( $_GET['saved'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'String translations saved.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
+            <?php if ( isset( $_GET['po_imported'] ) ) : ?><div class="notice notice-success"><p><?php echo esc_html( sprintf( __( 'Imported %d interface-string translations from the PO file.', 'simple-multilang-blocks' ), absint( $_GET['po_imported'] ) ) ); ?></p></div><?php endif; ?>
+            <?php if ( isset( $_GET['po_error'] ) ) : ?><div class="notice notice-warning"><p><?php esc_html_e( 'The PO file could not be imported. Select a small valid .po file exported by Simple Multilang.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
 
             <div class="sml-toolbar">
                 <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
@@ -205,6 +209,19 @@ final class SML_Theme_Strings {
                     <label class="screen-reader-text" for="sml-string-search"><?php esc_html_e( 'Search strings', 'simple-multilang-blocks' ); ?></label>
                     <input id="sml-string-search" type="search" name="s" value="<?php echo esc_attr( $search ); ?>" placeholder="<?php esc_attr_e( 'Search source text', 'simple-multilang-blocks' ); ?>">
                     <button class="button"><?php esc_html_e( 'Search', 'simple-multilang-blocks' ); ?></button>
+                </form>
+                <form method="get" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                    <?php wp_nonce_field( 'sml_export_po' ); ?>
+                    <input type="hidden" name="action" value="sml_export_po">
+                    <label><span class="screen-reader-text"><?php esc_html_e( 'Export language', 'simple-multilang-blocks' ); ?></span><select name="language"><?php foreach ( $languages as $slug => $language ) : ?><option value="<?php echo esc_attr( $slug ); ?>"><?php echo esc_html( $language['name'] ); ?></option><?php endforeach; ?></select></label>
+                    <button class="button"><?php esc_html_e( 'Export PO', 'simple-multilang-blocks' ); ?></button>
+                </form>
+                <form method="post" enctype="multipart/form-data" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                    <?php wp_nonce_field( 'sml_import_po' ); ?>
+                    <input type="hidden" name="action" value="sml_import_po">
+                    <label><span class="screen-reader-text"><?php esc_html_e( 'Import language', 'simple-multilang-blocks' ); ?></span><select name="language"><?php foreach ( $languages as $slug => $language ) : ?><option value="<?php echo esc_attr( $slug ); ?>"><?php echo esc_html( $language['name'] ); ?></option><?php endforeach; ?></select></label>
+                    <input type="file" name="sml_po_file" accept=".po,text/x-gettext-translation">
+                    <button class="button"><?php esc_html_e( 'Import PO', 'simple-multilang-blocks' ); ?></button>
                 </form>
             </div>
 
@@ -311,6 +328,163 @@ final class SML_Theme_Strings {
         $url = add_query_arg( array( 'saved' => '1', 's' => isset( $_POST['s'] ) ? sanitize_text_field( $_POST['s'] ) : '', 'paged' => absint( $_POST['paged'] ?? 1 ) ), admin_url( 'options-general.php?page=sml-theme-strings' ) );
         wp_safe_redirect( $url );
         exit;
+    }
+
+    /** Exports the editable catalogue rather than changing a theme's shipped files. */
+    public function export_po() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You are not allowed to export string translations.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( 'sml_export_po' );
+        $language = isset( $_GET['language'] ) ? sanitize_key( wp_unslash( $_GET['language'] ) ) : '';
+        $languages = SML_Core::get_languages();
+        if ( ! isset( $languages[ $language ] ) ) {
+            wp_die( esc_html__( 'The export language is invalid.', 'simple-multilang-blocks' ) );
+        }
+
+        global $wpdb;
+        $strings = SML_Core::strings_table();
+        $translations = SML_Core::string_translations_table();
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT s.context, s.name, s.source_value, COALESCE(t.value, '') AS translation, COALESCE(t.status, '') AS status FROM {$strings} s LEFT JOIN {$translations} t ON t.string_id = s.id AND t.language = %s ORDER BY s.id ASC",
+                $language
+            )
+        );
+
+        nocache_headers();
+        header( 'Content-Type: text/x-gettext-translation; charset=UTF-8' );
+        header( 'Content-Disposition: attachment; filename="simple-multilang-' . rawurlencode( $language ) . '.po"' );
+        echo '# Simple Multilang Blocks interface-string export' . "\n";
+        echo 'msgid ""' . "\n";
+        echo 'msgstr ""' . "\n";
+        echo '"Language: ' . self::po_quote( $languages[ $language ]['code'] ) . '\\n"' . "\n";
+        echo '"Content-Type: text/plain; charset=UTF-8\\n"' . "\n";
+        echo '"Content-Transfer-Encoding: 8bit\\n"' . "\n\n";
+        foreach ( $rows as $row ) {
+            $parts = self::split_string_name( $row->name );
+            echo '#. sml-context: ' . rawurlencode( (string) $row->context ) . "\n";
+            if ( 'needs_review' === $row->status ) {
+                echo '#, fuzzy' . "\n";
+            }
+            if ( '' !== $parts['context'] ) {
+                echo 'msgctxt "' . self::po_quote( $parts['context'] ) . '"' . "\n";
+            }
+            // msgid is the stable gettext key, so an exported PO imports back
+            // into the exact same catalogue row even if its visible fallback
+            // was changed by a later theme update.
+            echo 'msgid "' . self::po_quote( $parts['id'] ) . '"' . "\n";
+            echo 'msgstr "' . self::po_quote( $row->translation ) . '"' . "\n\n";
+        }
+        exit;
+    }
+
+    /** Imports only ordinary PO text, never executable files or theme MO files. */
+    public function import_po() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You are not allowed to import string translations.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( 'sml_import_po' );
+        $language = isset( $_POST['language'] ) ? sanitize_key( wp_unslash( $_POST['language'] ) ) : '';
+        $languages = SML_Core::get_languages();
+        $file = isset( $_FILES['sml_po_file'] ) && is_array( $_FILES['sml_po_file'] ) ? $_FILES['sml_po_file'] : array();
+        $filename = isset( $file['name'] ) ? sanitize_file_name( $file['name'] ) : '';
+        $tmp_name = isset( $file['tmp_name'] ) ? (string) $file['tmp_name'] : '';
+        $size = isset( $file['size'] ) ? absint( $file['size'] ) : 0;
+        if ( ! isset( $languages[ $language ] ) || empty( $file ) || UPLOAD_ERR_OK !== absint( $file['error'] ?? UPLOAD_ERR_NO_FILE ) || ! preg_match( '/\.po$/i', $filename ) || $size > 5 * MB_IN_BYTES || ! $tmp_name || ! is_uploaded_file( $tmp_name ) ) {
+            $this->redirect_po_import( 0, true );
+        }
+        $contents = file_get_contents( $tmp_name ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+        if ( false === $contents || '' === $contents ) {
+            $this->redirect_po_import( 0, true );
+        }
+
+        $imported = 0;
+        foreach ( self::parse_po( $contents ) as $entry ) {
+            if ( '' === $entry['id'] || '' === $entry['translation'] || '' === $entry['sml_context'] ) {
+                continue;
+            }
+            $context = sanitize_text_field( $entry['sml_context'] );
+            if ( '' === $context || strlen( $context ) > 191 ) {
+                continue;
+            }
+            $name = self::string_name( $entry['context'], $entry['id'] );
+            $string_id = SML_Core::find_string_id( $context, $name );
+            if ( ! $string_id ) {
+                $string_id = SML_Core::register_string( $context, $name, $entry['id'] );
+            }
+            if ( $string_id ) {
+                SML_Core::save_string_translation( $string_id, $language, wp_kses_post( $entry['translation'] ), ! empty( $entry['fuzzy'] ) ? 'needs_review' : 'verified' );
+                ++$imported;
+            }
+        }
+        $this->redirect_po_import( $imported, false );
+    }
+
+    private function redirect_po_import( $imported, $error ) {
+        $args = $error ? array( 'po_error' => '1' ) : array( 'po_imported' => absint( $imported ) );
+        wp_safe_redirect( add_query_arg( $args, admin_url( 'options-general.php?page=sml-theme-strings' ) ) );
+        exit;
+    }
+
+    private static function split_string_name( $name ) {
+        $name = (string) $name;
+        $separator = strpos( $name, "\004" );
+        return array(
+            'context' => false === $separator ? '' : substr( $name, 0, $separator ),
+            'id'      => false === $separator ? $name : substr( $name, $separator + 1 ),
+        );
+    }
+
+    private static function po_quote( $value ) {
+        return str_replace( array( "\\", '"', "\r", "\n" ), array( "\\\\", '\\"', '', '\\n' ), (string) $value );
+    }
+
+    /** @return array<int,array{context:string,id:string,translation:string,sml_context:string,fuzzy:bool}> */
+    private static function parse_po( $contents ) {
+        $entries = array();
+        $entry = array( 'context' => '', 'id' => '', 'translation' => '', 'sml_context' => '', 'fuzzy' => false );
+        $field = '';
+        $flush = static function () use ( &$entries, &$entry, &$field ) {
+            if ( '' !== $entry['id'] ) {
+                $entries[] = $entry;
+            }
+            $entry = array( 'context' => '', 'id' => '', 'translation' => '', 'sml_context' => '', 'fuzzy' => false );
+            $field = '';
+        };
+        foreach ( preg_split( '/\R/', (string) $contents ) as $line ) {
+            if ( '' === trim( $line ) ) {
+                $flush();
+                continue;
+            }
+            if ( 0 === strpos( $line, '#. sml-context:' ) ) {
+                $entry['sml_context'] = rawurldecode( trim( substr( $line, strlen( '#. sml-context:' ) ) ) );
+                continue;
+            }
+            if ( 0 === strpos( $line, '#,' ) && false !== strpos( $line, 'fuzzy' ) ) {
+                $entry['fuzzy'] = true;
+                continue;
+            }
+            if ( 0 === strpos( $line, '#' ) ) {
+                continue;
+            }
+            if ( preg_match( '/^(msgctxt|msgid|msgstr(?:\[0\])?)\s+"(.*)"$/', $line, $match ) ) {
+                if ( 'msgctxt' === $match[1] ) {
+                    $field = 'context';
+                } elseif ( 'msgid' === $match[1] ) {
+                    $field = 'id';
+                } else {
+                    $field = 'translation';
+                }
+                $entry[ $field ] = stripcslashes( $match[2] );
+                continue;
+            }
+            if ( $field && preg_match( '/^"(.*)"$/', $line, $match ) ) {
+                $entry[ $field ] .= stripcslashes( $match[1] );
+            }
+        }
+        $flush();
+        return $entries;
     }
 
     private static function parse_pot( $file ) {

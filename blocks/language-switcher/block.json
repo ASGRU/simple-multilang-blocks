@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schemas.wp.org/trunk/block.json",
+  "apiVersion": 3,
+  "name": "simple-multilang-blocks/language-switcher",
+  "version": "1.4.0",
+  "title": "Language switcher",
+  "category": "widgets",
+  "icon": "translation",
+  "description": "A language selector that follows the current page and active theme style.",
+  "textdomain": "simple-multilang-blocks",
+  "editorStyle": "simple-multilang-blocks-editor",
+  "attributes": {
+    "style": {
+      "type": "string",
+      "default": "dropdown"
+    },
+    "appearance": {
+      "type": "string",
+      "default": ""
+    },
+    "showName": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "supports": {
+    "html": false,
+    "align": ["wide", "full"]
+  }
+}

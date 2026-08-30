@@ -19,10 +19,12 @@ final class SML_WPML_Migrator {
             'languages'           => 0,
             'post_groups'         => 0,
             'linked_post_groups'  => 0,
+            'unlinked_post_groups'=> 0,
             'special_post_groups' => 0,
             'posts'               => 0,
             'term_groups'         => 0,
             'linked_term_groups'  => 0,
+            'unlinked_term_groups'=> 0,
             'menu_groups'         => 0,
             'terms'               => 0,
             'strings'             => 0,
@@ -106,7 +108,7 @@ final class SML_WPML_Migrator {
         $special = self::get_related_post_types();
         $all_post_types = array_values( array_unique( array_merge( $public, $special ) ) );
         if ( ! $all_post_types ) {
-            return array( 'post_groups' => 0, 'linked_post_groups' => 0, 'special_post_groups' => 0, 'posts' => 0 );
+            return array( 'post_groups' => 0, 'linked_post_groups' => 0, 'unlinked_post_groups' => 0, 'special_post_groups' => 0, 'posts' => 0 );
         }
 
         $element_types = array();
@@ -134,6 +136,7 @@ final class SML_WPML_Migrator {
         return array(
             'post_groups'    => count( $public_groups ),
             'linked_post_groups' => count( $linked_public_groups ),
+            'unlinked_post_groups' => count( $public_groups ) - count( $linked_public_groups ),
             'special_post_groups' => count( $special_groups ),
             'posts'          => self::count_grouped_objects( $groups_to_sync ) + $fallback_posts,
             'fallback_posts' => $fallback_posts,
@@ -144,7 +147,7 @@ final class SML_WPML_Migrator {
         global $wpdb;
         $taxonomies = self::get_migratable_taxonomies();
         if ( ! $taxonomies ) {
-            return array( 'term_groups' => 0, 'linked_term_groups' => 0, 'terms' => 0 );
+            return array( 'term_groups' => 0, 'linked_term_groups' => 0, 'unlinked_term_groups' => 0, 'terms' => 0 );
         }
         $element_types = array();
         foreach ( $taxonomies as $taxonomy ) {
@@ -169,6 +172,7 @@ final class SML_WPML_Migrator {
         return array(
             'term_groups'   => count( $groups ),
             'linked_term_groups' => count( $linked_groups ),
+            'unlinked_term_groups' => count( $groups ) - count( $linked_groups ),
             'menu_groups'   => count( $menu_groups ),
             'terms'         => self::count_grouped_objects( $groups ) + $fallback_terms,
             'fallback_terms'=> $fallback_terms,

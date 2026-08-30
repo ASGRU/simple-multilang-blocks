@@ -54,4 +54,10 @@ define( 'SML_OPENAI_API_KEY', '...' );
 define( 'SML_OPENAI_MODEL', 'gpt-5-mini' );
 ```
 
-The admin settings select the DeepL Free/Pro endpoint and the OpenAI model name, but never accept or display API secrets. If a provider is disabled, unavailable or returns an invalid response, the plugin shows an editor-only notice and creates no duplicate draft or frontend error.
+The admin settings select the DeepL Free/Pro endpoint and the OpenAI model name, but never accept or display API secrets. Editor requests enter a small WordPress queue, which retries a temporary provider failure up to three times. A completed result is always a draft marked **Requires review**, available under **Tools → Translation review**. If the provider is disabled, unavailable or returns an invalid response, no duplicate draft or frontend error is created.
+
+## PO exchange and switcher block
+
+**Settings → Interface strings** can export translations for one language as a PO file and import the same PO format later. This only writes the plugin's own interface-string catalogue; it never replaces a theme or plugin's shipped PO/MO files. Entries marked `fuzzy` import as **Requires review**.
+
+The **Language switcher** block is available in the Block and Site editors. It renders the same current-page links, accessibility labels and theme-aware visual style as `[sml_language_switcher]`; no custom theme PHP is required.

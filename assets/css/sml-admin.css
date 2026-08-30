@@ -19,4 +19,11 @@
 .sml-review-dot { width: 8px; height: 8px; border-radius: 50%; background: #d63638; }
 .sml-review-badge { display: inline-block; margin-left: 5px; padding: 2px 5px; border-radius: 3px; background: #fff3cd; color: #6b4d00; font-size: 11px; font-weight: 600; }
 .sml-review-status .dashicons { color: #dba617; }
+.sml-queue-dot { width: 8px; height: 8px; border-radius: 50%; background: #2271b1; box-shadow: 0 0 0 2px #e7f5fe; }
+.sml-review-table { max-width: 1120px; }
+.sml-review-table td, .sml-review-table th { vertical-align: middle; }
+.sml-job-status { display: inline-block; padding: 2px 7px; border-radius: 10px; background: #e7f5fe; color: #0a4b78; font-weight: 600; }
+.sml-job-status.is-retry { background: #fff3cd; color: #6b4d00; }
+.sml-job-status.is-failed { background: #fbeaea; color: #8a2424; }
+.sml-migration-summary { margin: 8px 0 8px 20px; list-style: disc; }
 .column-sml_languages { width: 205px; }
