@@ -135,9 +135,28 @@ final class SML_GitHub_Updater {
         }
 
         $package = '';
+        $has_private_token = defined( 'SML_GITHUB_TOKEN' ) && SML_GITHUB_TOKEN;
         foreach ( (array) ( $release['assets'] ?? array() ) as $asset ) {
-            if ( isset( $asset['name'], $asset['url'] ) && 'simple-multilang-blocks.zip' === $asset['name'] ) {
+            if ( empty( $asset['name'] ) || 'simple-multilang-blocks.zip' !== $asset['name'] ) {
+                continue;
+            }
+
+            /*
+             * GitHub's asset API URL returns JSON unless its special Accept
+             * header is sent. Public repositories need neither that endpoint
+             * nor a token: use the actual browser download URL so WordPress
+             * receives a ZIP file. Private repositories keep the API URL,
+             * where authenticate_private_release_download() adds the header.
+             */
+            if ( $has_private_token && ! empty( $asset['url'] ) ) {
                 $package = esc_url_raw( $asset['url'] );
+            } elseif ( ! empty( $asset['browser_download_url'] ) ) {
+                $package = esc_url_raw( $asset['browser_download_url'] );
+            } elseif ( ! empty( $asset['url'] ) ) {
+                $package = esc_url_raw( $asset['url'] );
+            }
+
+            if ( $package ) {
                 break;
             }
         }

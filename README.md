@@ -14,7 +14,7 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 
 ## Release process
 
-Push a semantic-version tag such as `v1.3.1`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
+Push a semantic-version tag such as `v1.3.2`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
