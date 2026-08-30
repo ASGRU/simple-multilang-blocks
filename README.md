@@ -14,7 +14,7 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 
 ## Release process
 
-Push a semantic-version tag such as `v1.3.3`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
+Push a semantic-version tag such as `v1.4.3`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
@@ -40,7 +40,7 @@ Switcher placement and appearance are stored per active theme. **Use theme color
 
 ## Automatic translations
 
-Automatic translations are editor-triggered: use the language buttons on a post, page or product list, or the **Language & translations** sidebar in the editor. The source language can be any language configured in Simple Multilang.
+Automatic translations are editor-triggered: use the language buttons on a post, page or product list, the **Language & translations** sidebar in the editor, or **Queue automatic translation** in a category, tag or attribute editor. The source language can be any language configured in Simple Multilang.
 
 Choose a provider in **Settings → Simple Multilang** and define the corresponding secret outside the database:
 
@@ -54,7 +54,7 @@ define( 'SML_OPENAI_API_KEY', '...' );
 define( 'SML_OPENAI_MODEL', 'gpt-5-mini' );
 ```
 
-The admin settings select the DeepL Free/Pro endpoint and the OpenAI model name, but never accept or display API secrets. Editor requests enter a small WordPress queue, which retries a temporary provider failure up to three times. A completed result is always a draft marked **Requires review**, available under **Tools → Translation review**. If the provider is disabled, unavailable or returns an invalid response, no duplicate draft or frontend error is created.
+The admin settings select the DeepL Free/Pro endpoint and the OpenAI model name, but never accept or display API secrets. Editor requests enter a small WordPress queue, which retries a temporary provider failure up to three times. Posts become drafts and taxonomy terms receive a **Requires review** marker; both appear under **Tools → Translation review**. If the provider is disabled, unavailable or returns an invalid response, no duplicate content, term or frontend error is created.
 
 ## PO exchange and switcher block
 
@@ -72,4 +72,4 @@ WooCommerce product lists—including related-product and block queries—follow
 
 ## Taxonomy terms
 
-The term editor now offers **Create linked term** beside every missing language. It copies the source description and safe custom term metadata, maps an already translated parent, links the new term and marks it for review. Existing terms remain linkable by ID, so the plugin never silently merges same-named categories.
+The term editor offers **Create linked term** and **Queue automatic translation** beside every missing language. Automatic translations use the same bounded background queue as posts, copy only safe custom term metadata, map an already translated parent and are marked **Requires review**. An editor can mark the completed term verified from its edit screen or **Tools → Translation review**. Existing terms remain linkable by ID, so the plugin never silently merges same-named categories.

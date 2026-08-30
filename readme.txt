@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.4.2
+Stable tag: 1.4.3
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -20,7 +20,7 @@ A lightweight multilingual layer for block-based WordPress sites.
 * PO import/export for the plugin's editable public-interface string catalogue.
 * Gutenberg Language Switcher block, alongside the automatic and shortcode variants.
 * WooCommerce product and related-product lists follow the active language without affecting checkout, account, REST or admin requests.
-* Create linked category, attribute and other taxonomy-term translations directly from the term editor.
+* Create or queue linked category, attribute and other taxonomy-term translations directly from the term editor, with their own review and queue views.
 * WordPress update notifications from signed GitHub Release assets.
 
 == Updating from GitHub ==
@@ -45,7 +45,7 @@ or
 
 Optional: `define( 'SML_OPENAI_MODEL', 'gpt-5-mini' );`
 
-The plugin never sends content to a provider until an editor queues a translation. The request runs through a small WordPress background queue and retries a temporary provider problem up to three times. Successful results are linked drafts with a **Requires review** marker; they are never published automatically. Failed jobs can be queued again from **Tools → Translation review**. If a provider is unavailable, no draft is created and no frontend error is shown.
+The plugin never sends content to a provider until an editor queues a translation. The request runs through a small WordPress background queue and retries a temporary provider problem up to three times. Successful post results are linked drafts; taxonomy terms use the same queue and a review marker. Neither is published automatically. Failed jobs remain visible in **Tools → Translation review**. If a provider is unavailable, no duplicate content, term or frontend error is shown.
 
 == Interface strings ==
 

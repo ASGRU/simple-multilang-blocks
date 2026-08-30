@@ -168,6 +168,25 @@ final class SML_Admin {
             )
         );
         $jobs = SML_Translation_Service::get_jobs( array( 'queued', 'processing', 'retry', 'failed' ) );
+        $term_jobs = SML_Translation_Service::get_term_jobs( array( 'queued', 'processing', 'retry', 'failed' ) );
+        $term_review = get_terms(
+            array(
+                'taxonomy'   => SML_Core::get_taxonomies(),
+                'hide_empty' => false,
+                'number'     => 50,
+                'orderby'    => 'term_id',
+                'order'      => 'DESC',
+                'meta_query' => array(
+                    array(
+                        'key'   => '_sml_translation_status',
+                        'value' => 'needs_review',
+                    ),
+                ),
+            )
+        );
+        if ( is_wp_error( $term_review ) ) {
+            $term_review = array();
+        }
         $languages = SML_Core::get_languages();
         ?>
         <div class="wrap sml-admin-wrap">
@@ -197,6 +216,22 @@ final class SML_Admin {
                 <?php endforeach; ?>
                 </tbody></table>
             <?php else : ?><p><?php esc_html_e( 'The queue is empty.', 'simple-multilang-blocks' ); ?></p><?php endif; ?>
+
+            <h2><?php esc_html_e( 'Taxonomy terms requiring review', 'simple-multilang-blocks' ); ?></h2>
+            <?php if ( $term_review ) : ?><table class="widefat striped sml-review-table"><thead><tr><th><?php esc_html_e( 'Translation', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Source', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Language', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?></th><th></th></tr></thead><tbody>
+                <?php foreach ( $term_review as $term ) : $taxonomy = get_taxonomy( $term->taxonomy ); if ( ! $taxonomy || ! current_user_can( $taxonomy->cap->manage_terms ) ) { continue; } $source_id = absint( get_term_meta( $term->term_id, '_sml_translation_source', true ) ); $source = $source_id ? get_term( $source_id, $term->taxonomy ) : false; $language = SML_Core::get_term_language( $term->term_id ); ?>
+                    <tr><td><strong><?php echo esc_html( $term->name ); ?></strong><br><span class="description"><?php echo esc_html( $term->taxonomy ); ?></span></td><td><?php if ( $source && ! is_wp_error( $source ) ) : ?><a href="<?php echo esc_url( get_edit_term_link( $source->term_id, $source->taxonomy ) ); ?>"><?php echo esc_html( $source->name ); ?></a><?php else : ?>—<?php endif; ?></td><td><?php echo esc_html( isset( $languages[ $language ] ) ? SML_Core::get_language_flag( $languages[ $language ] ) . ' ' . $languages[ $language ]['name'] : $language ); ?></td><td><?php echo esc_html( get_term_meta( $term->term_id, '_sml_translation_provider', true ) ); ?></td><td><a class="button button-primary" href="<?php echo esc_url( get_edit_term_link( $term->term_id, $term->taxonomy ) ); ?>"><?php esc_html_e( 'Review', 'simple-multilang-blocks' ); ?></a></td></tr>
+                <?php endforeach; ?>
+                </tbody></table>
+            <?php else : ?><p><?php esc_html_e( 'There are no machine-translated taxonomy terms waiting for review.', 'simple-multilang-blocks' ); ?></p><?php endif; ?>
+
+            <h2><?php esc_html_e( 'Automatic taxonomy term queue', 'simple-multilang-blocks' ); ?></h2>
+            <?php if ( $term_jobs ) : ?><table class="widefat striped sml-review-table"><thead><tr><th><?php esc_html_e( 'Source', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Target', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Status', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Attempts', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Updated', 'simple-multilang-blocks' ); ?></th></tr></thead><tbody>
+                <?php foreach ( $term_jobs as $job ) : $source = get_term( $job['source_term'] ); $source_taxonomy = $source && ! is_wp_error( $source ) ? get_taxonomy( $source->taxonomy ) : false; $target = $job['target_lang']; ?>
+                    <tr><td><?php if ( $source && ! is_wp_error( $source ) && $source_taxonomy && current_user_can( $source_taxonomy->cap->manage_terms ) ) : ?><a href="<?php echo esc_url( get_edit_term_link( $source->term_id, $source->taxonomy ) ); ?>"><?php echo esc_html( $source->name ); ?></a><?php else : ?>#<?php echo esc_html( $job['source_term'] ); ?><?php endif; ?></td><td><?php echo esc_html( isset( $languages[ $target ] ) ? SML_Core::get_language_flag( $languages[ $target ] ) . ' ' . $languages[ $target ]['name'] : $target ); ?></td><td><span class="sml-job-status is-<?php echo esc_attr( $job['status'] ); ?>"><?php echo esc_html( self::job_status_label( $job['status'] ) ); ?></span><?php if ( 'failed' === $job['status'] ) : ?><br><span class="description"><?php echo esc_html( self::job_error_label( $job['error'] ) ); ?></span><?php endif; ?></td><td><?php echo esc_html( $job['attempts'] ); ?>/<?php echo esc_html( SML_Translation_Service::MAX_ATTEMPTS ); ?></td><td><?php echo esc_html( $job['updated_at'] ?? '' ); ?></td></tr>
+                <?php endforeach; ?>
+                </tbody></table>
+            <?php else : ?><p><?php esc_html_e( 'The taxonomy term queue is empty.', 'simple-multilang-blocks' ); ?></p><?php endif; ?>
         </div>
         <?php
     }

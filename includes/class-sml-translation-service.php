@@ -13,13 +13,16 @@ final class SML_Translation_Service {
     const OPTION_OPENAI_MODEL   = 'sml_openai_model';
     const OPTION_DEEPL_ENDPOINT = 'sml_deepl_endpoint';
     const OPTION_JOBS           = 'sml_translation_jobs';
+    const OPTION_TERM_JOBS      = 'sml_term_translation_jobs';
     const CRON_HOOK             = 'sml_process_translation_job';
+    const TERM_CRON_HOOK        = 'sml_process_term_translation_job';
     const MAX_ATTEMPTS          = 3;
     const MAX_STORED_JOBS       = 100;
 
     /** Register the deliberately small, WordPress-native background queue. */
     public static function init() {
         add_action( self::CRON_HOOK, array( __CLASS__, 'process_queued_job' ), 10, 2 );
+        add_action( self::TERM_CRON_HOOK, array( __CLASS__, 'process_queued_term_job' ), 10, 2 );
     }
 
     public static function provider() {
@@ -74,11 +77,41 @@ final class SML_Translation_Service {
         $source_term_id = absint( $source_term_id );
         $target_language = sanitize_key( $target_language );
         $source = get_term( $source_term_id );
+        return self::create_term( $source, $target_language, $source->name, $source->description, 'manual' );
+    }
+
+    /** @return int|WP_Error */
+    public static function create_machine_term( $source_term_id, $target_language ) {
+        $validation = self::validate_term_request( $source_term_id, $target_language );
+        if ( is_wp_error( $validation ) ) {
+            return $validation;
+        }
+        $source_term_id = absint( $source_term_id );
+        $target_language = sanitize_key( $target_language );
+        $source = get_term( $source_term_id );
+        $translated = self::translate_fields(
+            array(
+                'title'   => (string) $source->name,
+                'excerpt' => '',
+                'content' => (string) $source->description,
+            ),
+            SML_Core::get_term_language( $source_term_id ),
+            $target_language
+        );
+        if ( is_wp_error( $translated ) ) {
+            return $translated;
+        }
+        return self::create_term( $source, $target_language, $translated['title'], $translated['content'], self::provider() );
+    }
+
+    /** @return int|WP_Error */
+    private static function create_term( $source, $target_language, $name, $description, $provider ) {
+        $source_term_id = absint( $source->term_id );
+        $target_language = sanitize_key( $target_language );
         $translations = SML_Core::get_term_translations( $source_term_id );
         if ( ! $translations ) {
             $translations[ SML_Core::get_term_language( $source_term_id ) ] = $source_term_id;
         }
-
         $parent = 0;
         if ( ! empty( $source->parent ) ) {
             $parent_translations = SML_Core::get_term_translations( $source->parent );
@@ -89,12 +122,12 @@ final class SML_Translation_Service {
         // WordPress does permit an existing term to be renamed afterwards, so
         // create a unique internal value first and then set the editor-facing
         // translated name through the normal term API.
-        $placeholder = sprintf( '%1$s — %2$s', $source->name, $languages[ $target_language ]['name'] );
+        $placeholder = sprintf( '%1$s — %2$s', $name, $languages[ $target_language ]['name'] );
         $created = wp_insert_term(
             $placeholder,
             $source->taxonomy,
             array(
-                'description' => $source->description,
+                'description' => $description,
                 'parent'      => $parent,
                 'slug'        => sanitize_title( $source->slug . '-' . $target_language ),
             )
@@ -111,8 +144,8 @@ final class SML_Translation_Service {
             $term_id,
             $source->taxonomy,
             array(
-                'name'        => $source->name,
-                'description' => $source->description,
+                'name'        => $name,
+                'description' => $description,
                 'parent'      => $parent,
                 'slug'        => sanitize_title( $source->slug . '-' . $target_language ),
             )
@@ -124,9 +157,9 @@ final class SML_Translation_Service {
         self::copy_term_meta( $source_term_id, $term_id );
         $translations[ $target_language ] = $term_id;
         SML_Core::sync_term_translations( $translations );
-        update_term_meta( $term_id, '_sml_translation_status', 'draft' );
+        update_term_meta( $term_id, '_sml_translation_status', 'manual' === $provider ? 'draft' : 'needs_review' );
         update_term_meta( $term_id, '_sml_translation_source', $source_term_id );
-        update_term_meta( $term_id, '_sml_translation_provider', 'manual' );
+        update_term_meta( $term_id, '_sml_translation_provider', sanitize_key( $provider ) );
         update_term_meta( $term_id, '_sml_translation_created_at', current_time( 'mysql', true ) );
 
         return $term_id;
@@ -172,6 +205,103 @@ final class SML_Translation_Service {
         self::schedule_job( $source_post_id, $target_language, time() + 5 );
 
         return $jobs[ $job_id ];
+    }
+
+    /** Queues a category, attribute or other translatable taxonomy term. */
+    public static function queue_machine_term( $source_term_id, $target_language ) {
+        $validation = self::validate_term_request( $source_term_id, $target_language );
+        if ( is_wp_error( $validation ) ) {
+            return $validation;
+        }
+        if ( ! self::is_available() ) {
+            return new WP_Error( 'sml_provider_unavailable', __( 'The selected translation service is unavailable. No term translation was created.', 'simple-multilang-blocks' ) );
+        }
+        $source_term_id = absint( $source_term_id );
+        $target_language = sanitize_key( $target_language );
+        $job_id = self::term_job_id( $source_term_id, $target_language );
+        $jobs = self::get_term_jobs();
+        if ( ! empty( $jobs[ $job_id ] ) && in_array( $jobs[ $job_id ]['status'], array( 'queued', 'processing', 'retry' ), true ) ) {
+            return $jobs[ $job_id ];
+        }
+        $jobs[ $job_id ] = array(
+            'job_id'       => $job_id,
+            'source_term'  => $source_term_id,
+            'target_lang'  => $target_language,
+            'status'       => 'queued',
+            'attempts'     => 0,
+            'created_at'   => current_time( 'mysql', true ),
+            'updated_at'   => current_time( 'mysql', true ),
+            'scheduled_at' => gmdate( 'Y-m-d H:i:s', time() + 5 ),
+            'actor'        => get_current_user_id(),
+            'error'        => '',
+        );
+        self::save_term_jobs( $jobs );
+        self::schedule_term_job( $source_term_id, $target_language, time() + 5 );
+        return $jobs[ $job_id ];
+    }
+
+    /** Processes an automatic term translation without exposing an API call to visitors. */
+    public static function process_queued_term_job( $source_term_id, $target_language ) {
+        $source_term_id = absint( $source_term_id );
+        $target_language = sanitize_key( $target_language );
+        $job_id = self::term_job_id( $source_term_id, $target_language );
+        $jobs = self::get_term_jobs();
+        if ( empty( $jobs[ $job_id ] ) || ! in_array( $jobs[ $job_id ]['status'], array( 'queued', 'retry', 'processing' ), true ) ) {
+            return;
+        }
+        $lock_key = 'sml_translation_lock_' . md5( $job_id );
+        if ( get_transient( $lock_key ) ) {
+            self::schedule_term_job( $source_term_id, $target_language, time() + MINUTE_IN_SECONDS );
+            return;
+        }
+        set_transient( $lock_key, 1, 5 * MINUTE_IN_SECONDS );
+        $jobs[ $job_id ]['status'] = 'processing';
+        $jobs[ $job_id ]['updated_at'] = current_time( 'mysql', true );
+        self::save_term_jobs( $jobs );
+        try {
+            $result = self::create_machine_term( $source_term_id, $target_language );
+        } catch ( Throwable $error ) {
+            $result = new WP_Error( 'sml_translation_exception', __( 'The translation service could not complete this request.', 'simple-multilang-blocks' ) );
+        }
+        $jobs = self::get_term_jobs();
+        if ( empty( $jobs[ $job_id ] ) ) {
+            delete_transient( $lock_key );
+            return;
+        }
+        $jobs[ $job_id ]['updated_at'] = current_time( 'mysql', true );
+        if ( ! is_wp_error( $result ) ) {
+            $jobs[ $job_id ]['status'] = 'completed';
+            $jobs[ $job_id ]['translation_term'] = absint( $result );
+            $jobs[ $job_id ]['error'] = '';
+            unset( $jobs[ $job_id ]['scheduled_at'] );
+            self::save_term_jobs( $jobs );
+            delete_transient( $lock_key );
+            return;
+        }
+        if ( 'sml_term_translation_exists' === $result->get_error_code() ) {
+            $data = $result->get_error_data();
+            $jobs[ $job_id ]['status'] = 'completed';
+            $jobs[ $job_id ]['translation_term'] = ! empty( $data['term_id'] ) ? absint( $data['term_id'] ) : 0;
+            $jobs[ $job_id ]['error'] = '';
+            unset( $jobs[ $job_id ]['scheduled_at'] );
+            self::save_term_jobs( $jobs );
+            delete_transient( $lock_key );
+            return;
+        }
+        $jobs[ $job_id ]['attempts'] = absint( $jobs[ $job_id ]['attempts'] ) + 1;
+        $jobs[ $job_id ]['error'] = sanitize_key( $result->get_error_code() );
+        if ( self::is_retryable_error( $result ) && $jobs[ $job_id ]['attempts'] < self::MAX_ATTEMPTS ) {
+            $delay = min( 20 * MINUTE_IN_SECONDS, 5 * MINUTE_IN_SECONDS * ( 1 << ( $jobs[ $job_id ]['attempts'] - 1 ) ) );
+            $jobs[ $job_id ]['status'] = 'retry';
+            $jobs[ $job_id ]['scheduled_at'] = gmdate( 'Y-m-d H:i:s', time() + $delay );
+            self::save_term_jobs( $jobs );
+            self::schedule_term_job( $source_term_id, $target_language, time() + $delay );
+        } else {
+            $jobs[ $job_id ]['status'] = 'failed';
+            unset( $jobs[ $job_id ]['scheduled_at'] );
+            self::save_term_jobs( $jobs );
+        }
+        delete_transient( $lock_key );
     }
 
     /**
@@ -311,14 +441,49 @@ final class SML_Translation_Service {
         return $jobs;
     }
 
+    /** @return array<string,array> */
+    public static function get_term_jobs( $statuses = array() ) {
+        $jobs = get_option( self::OPTION_TERM_JOBS, array() );
+        if ( ! is_array( $jobs ) ) {
+            return array();
+        }
+        $statuses = array_filter( array_map( 'sanitize_key', (array) $statuses ) );
+        foreach ( $jobs as $job_id => $job ) {
+            if ( ! is_array( $job ) || empty( $job['source_term'] ) || empty( $job['target_lang'] ) || empty( $job['status'] ) ) {
+                unset( $jobs[ $job_id ] );
+                continue;
+            }
+            $jobs[ $job_id ]['job_id'] = (string) $job_id;
+            $jobs[ $job_id ]['source_term'] = absint( $job['source_term'] );
+            $jobs[ $job_id ]['target_lang'] = sanitize_key( $job['target_lang'] );
+            $jobs[ $job_id ]['status'] = sanitize_key( $job['status'] );
+            $jobs[ $job_id ]['attempts'] = absint( $job['attempts'] ?? 0 );
+            $jobs[ $job_id ]['error'] = sanitize_key( $job['error'] ?? '' );
+            if ( $statuses && ! in_array( $jobs[ $job_id ]['status'], $statuses, true ) ) {
+                unset( $jobs[ $job_id ] );
+            }
+        }
+        uasort( $jobs, static function ( $left, $right ) {
+            return strcmp( (string) ( $right['updated_at'] ?? '' ), (string) ( $left['updated_at'] ?? '' ) );
+        } );
+        return $jobs;
+    }
+
     public static function get_job( $source_post_id, $target_language ) {
         $jobs = self::get_jobs();
         $job_id = self::job_id( $source_post_id, $target_language );
         return isset( $jobs[ $job_id ] ) ? $jobs[ $job_id ] : array();
     }
 
+    public static function get_term_job( $source_term_id, $target_language ) {
+        $jobs = self::get_term_jobs();
+        $job_id = self::term_job_id( $source_term_id, $target_language );
+        return isset( $jobs[ $job_id ] ) ? $jobs[ $job_id ] : array();
+    }
+
     public static function clear_scheduled_jobs() {
         wp_clear_scheduled_hook( self::CRON_HOOK );
+        wp_clear_scheduled_hook( self::TERM_CRON_HOOK );
     }
 
     private static function validate_machine_request( $source_post_id, $target_language ) {
@@ -361,10 +526,21 @@ final class SML_Translation_Service {
         return absint( $source_post_id ) . ':' . sanitize_key( $target_language );
     }
 
+    private static function term_job_id( $source_term_id, $target_language ) {
+        return 'term:' . absint( $source_term_id ) . ':' . sanitize_key( $target_language );
+    }
+
     private static function schedule_job( $source_post_id, $target_language, $timestamp ) {
         $args = array( absint( $source_post_id ), sanitize_key( $target_language ) );
         if ( ! wp_next_scheduled( self::CRON_HOOK, $args ) ) {
             wp_schedule_single_event( max( time() + 1, absint( $timestamp ) ), self::CRON_HOOK, $args );
+        }
+    }
+
+    private static function schedule_term_job( $source_term_id, $target_language, $timestamp ) {
+        $args = array( absint( $source_term_id ), sanitize_key( $target_language ) );
+        if ( ! wp_next_scheduled( self::TERM_CRON_HOOK, $args ) ) {
+            wp_schedule_single_event( max( time() + 1, absint( $timestamp ) ), self::TERM_CRON_HOOK, $args );
         }
     }
 
@@ -399,6 +575,23 @@ final class SML_Translation_Service {
             $jobs = array_slice( $jobs, 0, self::MAX_STORED_JOBS, true );
         }
         update_option( self::OPTION_JOBS, $jobs, false );
+    }
+
+    private static function save_term_jobs( $jobs ) {
+        $jobs = is_array( $jobs ) ? $jobs : array();
+        $cutoff = gmdate( 'Y-m-d H:i:s', time() - 30 * DAY_IN_SECONDS );
+        foreach ( $jobs as $job_id => $job ) {
+            if ( in_array( $job['status'] ?? '', array( 'completed', 'failed' ), true ) && ! empty( $job['updated_at'] ) && $job['updated_at'] < $cutoff ) {
+                unset( $jobs[ $job_id ] );
+            }
+        }
+        uasort( $jobs, static function ( $left, $right ) {
+            return strcmp( (string) ( $right['updated_at'] ?? '' ), (string) ( $left['updated_at'] ?? '' ) );
+        } );
+        if ( count( $jobs ) > self::MAX_STORED_JOBS ) {
+            $jobs = array_slice( $jobs, 0, self::MAX_STORED_JOBS, true );
+        }
+        update_option( self::OPTION_TERM_JOBS, $jobs, false );
     }
 
     /**

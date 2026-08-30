@@ -64,6 +64,8 @@ final class SML_Core {
         add_action( 'admin_post_sml_preview_wpml', array( $this, 'preview_wpml' ) );
         add_action( 'admin_post_sml_import_wpml', array( $this, 'import_wpml' ) );
         add_action( 'admin_post_sml_create_term_translation', array( $this, 'create_term_translation' ) );
+        add_action( 'admin_post_sml_translate_term', array( $this, 'queue_term_translation' ) );
+        add_action( 'admin_post_sml_mark_term_translation_verified', array( $this, 'mark_term_translation_verified' ) );
     }
 
     public static function activate() {
@@ -879,7 +881,16 @@ final class SML_Core {
     public function render_term_edit_fields( $term, $taxonomy ) {
         wp_nonce_field( 'sml_save_term_language_' . $taxonomy, 'sml_term_language_nonce' );
         ?>
-        <tr class="form-field"><th scope="row"><label><?php esc_html_e( 'Simple Multilang', 'simple-multilang-blocks' ); ?></label></th><td><?php $this->render_term_fields( $term->term_id ); ?></td></tr>
+        <tr class="form-field"><th scope="row"><label><?php esc_html_e( 'Simple Multilang', 'simple-multilang-blocks' ); ?></label></th><td>
+            <?php if ( isset( $_GET['sml_term_queued'] ) ) : ?><p class="sml-review-badge"><?php esc_html_e( 'Automatic translation queued', 'simple-multilang-blocks' ); ?></p><?php endif; ?>
+            <?php if ( isset( $_GET['sml_term_verified'] ) ) : ?><p class="sml-review-badge"><?php esc_html_e( 'Translation marked as verified.', 'simple-multilang-blocks' ); ?></p><?php endif; ?>
+            <?php if ( isset( $_GET['sml_term_error'] ) ) : ?><p class="sml-review-badge"><?php esc_html_e( 'The term translation could not be created. Check the provider or link an existing term by ID.', 'simple-multilang-blocks' ); ?></p><?php endif; ?>
+            <?php if ( 'needs_review' === get_term_meta( $term->term_id, '_sml_translation_status', true ) ) : ?>
+                <?php $verify_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_mark_term_translation_verified', 'term' => $term->term_id ), admin_url( 'admin-post.php' ) ), 'sml_mark_term_translation_verified_' . $term->term_id ); ?>
+                <p class="sml-review-badge"><?php esc_html_e( 'Machine translation — requires review.', 'simple-multilang-blocks' ); ?> <a href="<?php echo esc_url( $verify_url ); ?>"><?php esc_html_e( 'Mark verified', 'simple-multilang-blocks' ); ?></a></p>
+            <?php endif; ?>
+            <?php $this->render_term_fields( $term->term_id ); ?>
+        </td></tr>
         <?php
     }
 
@@ -899,26 +910,23 @@ final class SML_Core {
                     echo ' <span class="sml-review-badge">' . esc_html__( 'Requires review', 'simple-multilang-blocks' ) . '</span>';
                 }
             } elseif ( $term_id && $slug !== $current ) {
-                $taxonomy = get_term_field( 'taxonomy', $term_id );
                 $url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_create_term_translation', 'term' => $term_id, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_create_term_translation_' . $term_id . '_' . $slug );
+                $machine_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_translate_term', 'term' => $term_id, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_translate_term_' . $term_id . '_' . $slug );
                 echo ' <a class="button button-small button-secondary" href="' . esc_url( $url ) . '">' . esc_html__( 'Create linked term', 'simple-multilang-blocks' ) . '</a>';
+                $job = SML_Translation_Service::get_term_job( $term_id, $slug );
+                if ( $job && in_array( $job['status'], array( 'queued', 'processing', 'retry' ), true ) ) {
+                    echo ' <span class="sml-review-badge">' . esc_html__( 'Automatic translation queued', 'simple-multilang-blocks' ) . '</span>';
+                } else {
+                    echo ' <a class="button button-small" href="' . esc_url( $machine_url ) . '">' . esc_html__( 'Queue automatic translation', 'simple-multilang-blocks' ) . '</a>';
+                }
             }
             echo '</p>';
         }
     }
 
     public function create_term_translation() {
-        $term_id = isset( $_GET['term'] ) ? absint( $_GET['term'] ) : 0;
-        $language = isset( $_GET['lang'] ) ? sanitize_key( wp_unslash( $_GET['lang'] ) ) : '';
-        $term = $term_id ? get_term( $term_id ) : false;
-        $taxonomy = $term && ! is_wp_error( $term ) ? get_taxonomy( $term->taxonomy ) : false;
-        if ( ! $term || is_wp_error( $term ) || ! $taxonomy || ! current_user_can( $taxonomy->cap->manage_terms ) ) {
-            wp_die( esc_html__( 'You are not allowed to create this term translation.', 'simple-multilang-blocks' ) );
-        }
-        check_admin_referer( 'sml_create_term_translation_' . $term_id . '_' . $language );
-        if ( ! isset( self::get_languages()[ $language ] ) ) {
-            wp_die( esc_html__( 'The target language is invalid.', 'simple-multilang-blocks' ) );
-        }
+        list( $term, $language ) = $this->requested_term_translation( 'sml_create_term_translation' );
+        $term_id = $term->term_id;
         $result = SML_Translation_Service::create_manual_term( $term_id, $language );
         if ( is_wp_error( $result ) ) {
             wp_safe_redirect( add_query_arg( 'sml_term_error', '1', get_edit_term_link( $term_id, $term->taxonomy ) ) );
@@ -926,6 +934,46 @@ final class SML_Core {
         }
         wp_safe_redirect( add_query_arg( 'sml_term_created', '1', get_edit_term_link( absint( $result ), $term->taxonomy ) ) );
         exit;
+    }
+
+    public function queue_term_translation() {
+        list( $term, $language ) = $this->requested_term_translation( 'sml_translate_term' );
+        $result = SML_Translation_Service::queue_machine_term( $term->term_id, $language );
+        if ( is_wp_error( $result ) ) {
+            wp_safe_redirect( add_query_arg( 'sml_term_error', '1', get_edit_term_link( $term->term_id, $term->taxonomy ) ) );
+            exit;
+        }
+        wp_safe_redirect( add_query_arg( 'sml_term_queued', '1', get_edit_term_link( $term->term_id, $term->taxonomy ) ) );
+        exit;
+    }
+
+    public function mark_term_translation_verified() {
+        $term_id = isset( $_GET['term'] ) ? absint( $_GET['term'] ) : 0;
+        $term = $term_id ? get_term( $term_id ) : false;
+        $taxonomy = $term && ! is_wp_error( $term ) ? get_taxonomy( $term->taxonomy ) : false;
+        if ( ! $term || is_wp_error( $term ) || ! $taxonomy || ! current_user_can( $taxonomy->cap->manage_terms ) ) {
+            wp_die( esc_html__( 'You are not allowed to verify this term translation.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( 'sml_mark_term_translation_verified_' . $term_id );
+        update_term_meta( $term_id, '_sml_translation_status', 'verified' );
+        wp_safe_redirect( add_query_arg( 'sml_term_verified', '1', get_edit_term_link( $term_id, $term->taxonomy ) ) );
+        exit;
+    }
+
+    /** @return array{0:WP_Term,1:string} */
+    private function requested_term_translation( $action ) {
+        $term_id = isset( $_GET['term'] ) ? absint( $_GET['term'] ) : 0;
+        $language = isset( $_GET['lang'] ) ? sanitize_key( wp_unslash( $_GET['lang'] ) ) : '';
+        $term = $term_id ? get_term( $term_id ) : false;
+        $taxonomy = $term && ! is_wp_error( $term ) ? get_taxonomy( $term->taxonomy ) : false;
+        if ( ! $term || is_wp_error( $term ) || ! $taxonomy || ! current_user_can( $taxonomy->cap->manage_terms ) ) {
+            wp_die( esc_html__( 'You are not allowed to create this term translation.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( $action . '_' . $term_id . '_' . $language );
+        if ( ! isset( self::get_languages()[ $language ] ) ) {
+            wp_die( esc_html__( 'The target language is invalid.', 'simple-multilang-blocks' ) );
+        }
+        return array( $term, $language );
     }
 
     public function save_term_language( $term_id, $taxonomy ) {
@@ -1196,7 +1244,7 @@ final class SML_Core {
         <?php if ( $plugin_domains ) : foreach ( $plugin_domains as $domain => $plugin ) : ?><label><input type="checkbox" name="sml_interface_plugin_domains[]" value="<?php echo esc_attr( $domain ); ?>" <?php checked( in_array( $domain, $selected_plugin_domains, true ) ); ?>> <?php echo esc_html( $plugin['name'] . ' (' . $domain . ')' ); ?></label><?php endforeach; else : ?><span class="description"><?php esc_html_e( 'No eligible active plugins were found.', 'simple-multilang-blocks' ); ?></span><?php endif; ?>
         </div>
         <h2><?php esc_html_e( 'Language switcher', 'simple-multilang-blocks' ); ?></h2><p><label><input type="radio" name="sml_switcher_placement" value="automatic" <?php checked( 'automatic', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Show a floating switcher automatically', 'simple-multilang-blocks' ); ?></label><br><label><input type="radio" name="sml_switcher_placement" value="shortcode" <?php checked( 'shortcode', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Use shortcode only', 'simple-multilang-blocks' ); ?></label></p><p><label><?php esc_html_e( 'Appearance for this theme', 'simple-multilang-blocks' ); ?> <select name="sml_switcher_appearance"><option value="theme" <?php selected( 'theme', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Use theme colors', 'simple-multilang-blocks' ); ?></option><option value="light" <?php selected( 'light', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Light', 'simple-multilang-blocks' ); ?></option><option value="dark" <?php selected( 'dark', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Dark', 'simple-multilang-blocks' ); ?></option><option value="minimal" <?php selected( 'minimal', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Minimal', 'simple-multilang-blocks' ); ?></option></select></label> <label><?php esc_html_e( 'Theme-specific CSS class', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_switcher_custom_class" value="<?php echo esc_attr( self::get_switcher_custom_class() ); ?>" placeholder="my-theme-language-switcher"></label></p><p class="description"><code>[sml_language_switcher style="dropdown"]</code> <?php esc_html_e( 'inherits this theme setting; use appearance="light" or another appearance in a shortcode when needed.', 'simple-multilang-blocks' ); ?></p>
-        <h2><?php esc_html_e( 'Automatic translation', 'simple-multilang-blocks' ); ?></h2><p><label><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?> <select name="sml_translation_provider"><option value="" <?php selected( '', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'Disabled', 'simple-multilang-blocks' ); ?></option><option value="deepl" <?php selected( 'deepl', SML_Translation_Service::provider() ); ?>>DeepL</option><option value="openai" <?php selected( 'openai', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'OpenAI / ChatGPT', 'simple-multilang-blocks' ); ?></option></select></label></p><p><label><?php esc_html_e( 'OpenAI model', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_openai_model" value="<?php echo esc_attr( get_option( SML_Translation_Service::OPTION_OPENAI_MODEL, 'gpt-5-mini' ) ); ?>"></label></p><p><label><?php esc_html_e( 'DeepL endpoint', 'simple-multilang-blocks' ); ?> <select name="sml_deepl_endpoint"><option value="free" <?php selected( 'free', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api-free.deepl.com</option><option value="pro" <?php selected( 'pro', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api.deepl.com</option></select></label></p><div class="notice notice-info inline"><p><?php esc_html_e( 'API keys are never stored in WordPress. Add either SML_DEEPL_API_KEY or SML_OPENAI_API_KEY to wp-config.php. Generated content is always a draft marked “Requires review”; if the service is unavailable, no draft is created and no public-page error is shown.', 'simple-multilang-blocks' ); ?></p></div>
+        <h2><?php esc_html_e( 'Automatic translation', 'simple-multilang-blocks' ); ?></h2><p><label><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?> <select name="sml_translation_provider"><option value="" <?php selected( '', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'Disabled', 'simple-multilang-blocks' ); ?></option><option value="deepl" <?php selected( 'deepl', SML_Translation_Service::provider() ); ?>>DeepL</option><option value="openai" <?php selected( 'openai', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'OpenAI / ChatGPT', 'simple-multilang-blocks' ); ?></option></select></label></p><p><label><?php esc_html_e( 'OpenAI model', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_openai_model" value="<?php echo esc_attr( get_option( SML_Translation_Service::OPTION_OPENAI_MODEL, 'gpt-5-mini' ) ); ?>"></label></p><p><label><?php esc_html_e( 'DeepL endpoint', 'simple-multilang-blocks' ); ?> <select name="sml_deepl_endpoint"><option value="free" <?php selected( 'free', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api-free.deepl.com</option><option value="pro" <?php selected( 'pro', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api.deepl.com</option></select></label></p><div class="notice notice-info inline"><p><?php esc_html_e( 'API keys are never stored in WordPress. Generated posts remain drafts and generated taxonomy terms require review; if the service is unavailable, no content is created and no public-page error is shown. Add either SML_DEEPL_API_KEY or SML_OPENAI_API_KEY to wp-config.php.', 'simple-multilang-blocks' ); ?></p></div>
         <p><button class="button button-primary"><?php esc_html_e( 'Save settings', 'simple-multilang-blocks' ); ?></button></p></form>
         <hr><h2><?php esc_html_e( 'WPML migration', 'simple-multilang-blocks' ); ?></h2><p><?php esc_html_e( 'Imports active languages, selected posts, selected taxonomies and String Translation values. It never deletes WPML tables or options.', 'simple-multilang-blocks' ); ?></p>
         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_preview_wpml' ); ?><input type="hidden" name="action" value="sml_preview_wpml"><p><button class="button button-secondary"> <?php esc_html_e( 'Run migration preflight', 'simple-multilang-blocks' ); ?></button></p></form>
