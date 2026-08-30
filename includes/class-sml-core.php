@@ -40,6 +40,8 @@ final class SML_Core {
         add_filter( 'term_link', array( $this, 'filter_term_link' ), 20, 3 );
         add_filter( 'wp_nav_menu_args', array( $this, 'map_navigation_menu' ), 20 );
         add_filter( 'wp_nav_menu_objects', array( $this, 'map_navigation_menu_objects' ), 20, 2 );
+        add_filter( 'render_block_data', array( $this, 'map_navigation_block_data' ), 20, 2 );
+        add_filter( 'render_block', array( $this, 'hide_unavailable_navigation_block' ), 20, 2 );
         add_filter( 'language_attributes', array( $this, 'filter_language_attributes' ), 20, 2 );
         add_action( 'wp_head', array( $this, 'output_hreflang' ), 1 );
         add_filter( 'redirect_canonical', array( $this, 'prevent_language_canonical_redirect' ), 10, 2 );
@@ -60,7 +62,10 @@ final class SML_Core {
         add_action( 'init', array( $this, 'register_term_language_fields' ), 20 );
 
         add_action( 'admin_menu', array( $this, 'register_settings_page' ) );
+        add_action( 'admin_menu', array( $this, 'register_menu_sync_page' ), 30 );
         add_action( 'admin_post_sml_save_settings', array( $this, 'save_settings' ) );
+        add_action( 'admin_post_sml_save_menu_group', array( $this, 'save_menu_group' ) );
+        add_action( 'admin_post_sml_scan_menu_strings', array( $this, 'scan_menu_strings' ) );
         add_action( 'admin_post_sml_preview_wpml', array( $this, 'preview_wpml' ) );
         add_action( 'admin_post_sml_import_wpml', array( $this, 'import_wpml' ) );
         add_action( 'admin_post_sml_create_term_translation', array( $this, 'create_term_translation' ) );
@@ -509,31 +514,248 @@ final class SML_Core {
      * follow the active language. This also covers legacy WPML menu mappings.
      */
     public function map_navigation_menu_objects( $items, $menu ) {
-        if ( is_admin() && ! wp_doing_ajax() ) {
+        if ( ! self::should_map_navigation() ) {
             return $items;
         }
 
         $language = self::get_current_language();
+        $hidden = array();
         foreach ( $items as $item ) {
             if ( 'post_type' === $item->type ) {
-                $translations = self::get_post_translations( $item->object_id );
-                $target = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
-                if ( $target && self::is_public_post( $target ) ) {
-                    $item->object_id = $target;
-                    $item->url = get_permalink( $target );
+                if ( ! $this->map_menu_post_item( $item, $language ) ) {
+                    $hidden[ absint( $item->ID ) ] = true;
                 }
             } elseif ( 'taxonomy' === $item->type ) {
-                $translations = self::get_term_translations( $item->object_id );
-                $target = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
-                $term = $target ? get_term( $target, $item->object ) : false;
-                if ( $term && ! is_wp_error( $term ) ) {
-                    $item->object_id = $target;
-                    $item->url = get_term_link( $term );
+                if ( ! $this->map_menu_term_item( $item, $language ) ) {
+                    $hidden[ absint( $item->ID ) ] = true;
                 }
+            } elseif ( 'custom' === $item->type ) {
+                $item->title = self::menu_item_label_translation( $item, $language );
             }
         }
 
-        return $items;
+        return $this->remove_hidden_menu_items( $items, $hidden );
+    }
+
+    /**
+     * Maps Site Editor navigation blocks as well as classic menus. A linked
+     * wp_navigation post is selected first; standalone link blocks are then
+     * mapped in the same way as classic menu items.
+     */
+    public function map_navigation_block_data( $parsed_block, $source_block ) {
+        if ( ! self::should_map_navigation() || ! is_array( $parsed_block ) || empty( $parsed_block['blockName'] ) ) {
+            return $parsed_block;
+        }
+
+        $name = (string) $parsed_block['blockName'];
+        $attributes = isset( $parsed_block['attrs'] ) && is_array( $parsed_block['attrs'] ) ? $parsed_block['attrs'] : array();
+        $language = self::get_current_language();
+
+        if ( 'core/navigation' === $name && ! empty( $attributes['ref'] ) ) {
+            $translations = self::get_post_translations( absint( $attributes['ref'] ) );
+            $target = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+            if ( $target && 'wp_navigation' === get_post_type( $target ) && self::is_public_post( $target ) ) {
+                $attributes['ref'] = $target;
+            }
+        } elseif ( in_array( $name, array( 'core/navigation-link', 'core/navigation-submenu' ), true ) ) {
+            $attributes = $this->map_navigation_link_attributes( $attributes, $language );
+        }
+
+        $parsed_block['attrs'] = $attributes;
+        return $parsed_block;
+    }
+
+    /** Hides an unavailable navigation link without leaving a wrong-language URL. */
+    public function hide_unavailable_navigation_block( $block_content, $block ) {
+        if ( self::should_map_navigation() && ! empty( $block['attrs']['_sml_hidden'] ) ) {
+            return '';
+        }
+        return $block_content;
+    }
+
+    private static function should_map_navigation() {
+        return ! ( is_admin() && ! wp_doing_ajax() ) && ! ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() );
+    }
+
+    /** @return bool Whether the classic menu item remains available. */
+    private function map_menu_post_item( $item, $language ) {
+        $source_id = absint( $item->object_id );
+        $source = $source_id ? get_post( $source_id ) : false;
+        if ( ! $source || ! self::is_public_post( $source_id ) ) {
+            return false;
+        }
+        $source_label = sanitize_text_field( wp_strip_all_tags( get_the_title( $source ) ) );
+        $is_custom_label = self::menu_item_has_custom_label( $item->title, $source_label, $item->type );
+        $translations = self::get_post_translations( $source_id );
+        $target = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+        if ( $target && self::is_public_post( $target ) ) {
+            $item->object_id = $target;
+            $item->url = get_permalink( $target );
+            $item->title = $is_custom_label ? self::menu_item_label_translation( $item, $language ) : sanitize_text_field( wp_strip_all_tags( get_the_title( $target ) ) );
+            return true;
+        }
+        if ( ! self::post_is_visible_in_language( $source_id, $language ) ) {
+            return false;
+        }
+        $item->url = self::add_language_to_url( get_permalink( $source_id ), $language );
+        if ( $is_custom_label ) {
+            $item->title = self::menu_item_label_translation( $item, $language );
+        }
+        return true;
+    }
+
+    /** @return bool Whether the classic menu item remains available. */
+    private function map_menu_term_item( $item, $language ) {
+        $source_id = absint( $item->object_id );
+        $source = $source_id ? get_term( $source_id, $item->object ) : false;
+        if ( ! $source || is_wp_error( $source ) ) {
+            return false;
+        }
+        $source_label = sanitize_text_field( wp_strip_all_tags( $source->name ) );
+        $is_custom_label = self::menu_item_has_custom_label( $item->title, $source_label, $item->type );
+        $translations = self::get_term_translations( $source_id );
+        $target = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+        $term = $target ? get_term( $target, $item->object ) : false;
+        if ( $term && ! is_wp_error( $term ) ) {
+            $item->object_id = $target;
+            $item->url = get_term_link( $term );
+            $item->title = $is_custom_label ? self::menu_item_label_translation( $item, $language ) : sanitize_text_field( wp_strip_all_tags( $term->name ) );
+            return true;
+        }
+        if ( ! self::term_is_visible_in_language( $source_id, $language ) ) {
+            return false;
+        }
+        $item->url = self::add_language_to_url( get_term_link( $source ), $language );
+        if ( $is_custom_label ) {
+            $item->title = self::menu_item_label_translation( $item, $language );
+        }
+        return true;
+    }
+
+    private static function term_is_visible_in_language( $term_id, $language ) {
+        return self::get_term_language( $term_id ) === $language || in_array( $language, get_term_meta( $term_id, '_sml_visible_in', false ), true );
+    }
+
+    private static function menu_item_has_custom_label( $title, $source_label, $item_type ) {
+        if ( 'custom' === $item_type ) {
+            return true;
+        }
+        return '' !== trim( wp_strip_all_tags( (string) $title ) ) && trim( wp_strip_all_tags( (string) $title ) ) !== trim( wp_strip_all_tags( (string) $source_label ) );
+    }
+
+    private static function menu_item_label_translation( $item, $language ) {
+        $fallback = sanitize_text_field( wp_strip_all_tags( (string) $item->title ) );
+        $string_id = self::find_string_id( 'menu-item', 'item:' . absint( $item->ID ) );
+        return $string_id ? sanitize_text_field( wp_strip_all_tags( self::get_string_translation( $string_id, $language, $fallback ) ) ) : $fallback;
+    }
+
+    private function remove_hidden_menu_items( $items, $hidden ) {
+        do {
+            $changed = false;
+            foreach ( $items as $item ) {
+                $item_id = absint( $item->ID );
+                $parent_id = absint( $item->menu_item_parent );
+                if ( ! isset( $hidden[ $item_id ] ) && $parent_id && isset( $hidden[ $parent_id ] ) ) {
+                    $hidden[ $item_id ] = true;
+                    $changed = true;
+                }
+            }
+        } while ( $changed );
+
+        return array_values( array_filter( $items, static function ( $item ) use ( $hidden ) {
+            return ! isset( $hidden[ absint( $item->ID ) ] );
+        } ) );
+    }
+
+    private function map_navigation_link_attributes( $attributes, $language ) {
+        $source_attributes = $attributes;
+        $kind = isset( $attributes['kind'] ) ? sanitize_key( $attributes['kind'] ) : '';
+        $source_id = isset( $attributes['id'] ) ? absint( $attributes['id'] ) : 0;
+        if ( 'custom' === $kind && ! empty( $attributes['label'] ) ) {
+            $attributes['label'] = self::navigation_block_label_translation( $source_attributes, $language, $attributes['label'] );
+            return $attributes;
+        }
+        if ( ! $source_id || ! in_array( $kind, array( 'post-type', 'taxonomy' ), true ) ) {
+            return $attributes;
+        }
+
+        $source_label = '';
+        $target_label = '';
+        $target_id = 0;
+        $fallback_url = '';
+        $visible = false;
+        if ( 'post-type' === $kind ) {
+            $source = get_post( $source_id );
+            if ( ! $source || ! self::is_public_post( $source_id ) ) {
+                $attributes['_sml_hidden'] = true;
+                return $attributes;
+            }
+            $source_label = sanitize_text_field( wp_strip_all_tags( get_the_title( $source ) ) );
+            $translations = self::get_post_translations( $source_id );
+            $target_id = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+            if ( $target_id && self::is_public_post( $target_id ) ) {
+                $target_label = sanitize_text_field( wp_strip_all_tags( get_the_title( $target_id ) ) );
+                $fallback_url = get_permalink( $target_id );
+            } else {
+                $target_id = 0;
+                $visible = self::post_is_visible_in_language( $source_id, $language );
+                $fallback_url = self::add_language_to_url( get_permalink( $source_id ), $language );
+            }
+        } else {
+            $taxonomy = isset( $attributes['type'] ) ? sanitize_key( $attributes['type'] ) : '';
+            $source = $taxonomy ? get_term( $source_id, $taxonomy ) : false;
+            if ( ! $source || is_wp_error( $source ) ) {
+                $attributes['_sml_hidden'] = true;
+                return $attributes;
+            }
+            $source_label = sanitize_text_field( wp_strip_all_tags( $source->name ) );
+            $translations = self::get_term_translations( $source_id );
+            $target_id = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+            $target = $target_id ? get_term( $target_id, $taxonomy ) : false;
+            if ( $target && ! is_wp_error( $target ) ) {
+                $target_label = sanitize_text_field( wp_strip_all_tags( $target->name ) );
+                $fallback_url = get_term_link( $target );
+            } else {
+                $target_id = 0;
+                $visible = self::term_is_visible_in_language( $source_id, $language );
+                $fallback_url = self::add_language_to_url( get_term_link( $source ), $language );
+            }
+        }
+
+        if ( ! $target_id && ! $visible ) {
+            $attributes['_sml_hidden'] = true;
+            return $attributes;
+        }
+
+        $label = isset( $attributes['label'] ) ? (string) $attributes['label'] : '';
+        $custom_label = self::menu_item_has_custom_label( $label, $source_label, 'post-type' === $kind ? 'post_type' : 'taxonomy' );
+        if ( $target_id ) {
+            $attributes['id'] = $target_id;
+        }
+        $attributes['url'] = $fallback_url;
+        if ( ! $custom_label && '' !== $target_label ) {
+            $attributes['label'] = $target_label;
+        } elseif ( $custom_label ) {
+            $attributes['label'] = self::navigation_block_label_translation( $source_attributes, $language, $label );
+        }
+        return $attributes;
+    }
+
+    private static function navigation_block_label_translation( $attributes, $language, $fallback ) {
+        $fallback = sanitize_text_field( wp_strip_all_tags( (string) $fallback ) );
+        $string_id = self::find_string_id( 'navigation-block', self::navigation_block_string_name( $attributes ) );
+        return $string_id ? sanitize_text_field( wp_strip_all_tags( self::get_string_translation( $string_id, $language, $fallback ) ) ) : $fallback;
+    }
+
+    private static function navigation_block_string_name( $attributes ) {
+        $identity = array(
+            'id'    => absint( $attributes['id'] ?? 0 ),
+            'kind'  => sanitize_key( $attributes['kind'] ?? '' ),
+            'type'  => sanitize_key( $attributes['type'] ?? '' ),
+            'url'   => esc_url_raw( $attributes['url'] ?? '' ),
+            'label' => sanitize_text_field( wp_strip_all_tags( $attributes['label'] ?? '' ) ),
+        );
+        return 'link:' . hash( 'sha256', wp_json_encode( $identity ) );
     }
 
     private static function add_language_to_url( $url, $language ) {
@@ -1195,6 +1417,223 @@ final class SML_Core {
             $visibility[ $object_id ][] = $language;
         }
         return $visibility;
+    }
+
+    public function register_menu_sync_page() {
+        add_theme_page(
+            __( 'Multilingual menus', 'simple-multilang-blocks' ),
+            __( 'Multilingual menus', 'simple-multilang-blocks' ),
+            'edit_theme_options',
+            'sml-menu-sync',
+            array( $this, 'render_menu_sync_page' )
+        );
+    }
+
+    /** A controlled UI for linking separate classic WordPress menus by language. */
+    public function render_menu_sync_page() {
+        if ( ! current_user_can( 'edit_theme_options' ) ) {
+            return;
+        }
+        $menus = wp_get_nav_menus();
+        $languages = self::get_languages();
+        $groups = self::navigation_menu_groups( $menus );
+        ?>
+        <div class="wrap sml-admin-wrap">
+            <h1><?php esc_html_e( 'Multilingual menus', 'simple-multilang-blocks' ); ?></h1>
+            <p class="description"><?php esc_html_e( 'A shared classic menu automatically follows linked pages, posts, products and terms. Link separate menus below when a language needs its own custom links or labels; wp_nav_menu() will then select the matching menu automatically.', 'simple-multilang-blocks' ); ?></p>
+            <?php if ( isset( $_GET['sml_menu_saved'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Menu language links saved.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
+            <?php if ( isset( $_GET['sml_menu_scanned'] ) ) : ?><div class="notice notice-success"><p><?php echo esc_html( sprintf( __( 'Catalogued %d custom navigation labels.', 'simple-multilang-blocks' ), absint( $_GET['sml_menu_scanned'] ) ) ); ?></p></div><?php endif; ?>
+            <?php if ( isset( $_GET['sml_menu_error'] ) ) : ?><div class="notice notice-error"><p><?php esc_html_e( 'Choose a menu only once in a language group. Nothing was changed.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
+            <?php if ( ! $menus ) : ?>
+                <p><?php esc_html_e( 'Create a classic menu under Appearance → Menus first. Navigation blocks in block themes are mapped automatically when their links or wp_navigation posts are linked.', 'simple-multilang-blocks' ); ?></p>
+            <?php else : ?>
+                <h2><?php esc_html_e( 'Classic menu language groups', 'simple-multilang-blocks' ); ?></h2>
+                <?php foreach ( $groups as $group ) : ?>
+                    <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="sml-menu-group">
+                        <?php wp_nonce_field( 'sml_save_menu_group' ); ?>
+                        <input type="hidden" name="action" value="sml_save_menu_group">
+                        <table class="widefat striped"><thead><tr><?php foreach ( $languages as $language ) : ?><th><?php echo esc_html( self::get_language_flag( $language ) . ' ' . $language['name'] ); ?></th><?php endforeach; ?></tr></thead><tbody><tr>
+                            <?php foreach ( $languages as $slug => $language ) : ?><td><label class="screen-reader-text" for="sml-menu-<?php echo esc_attr( md5( wp_json_encode( $group ) ) . '-' . $slug ); ?>"><?php echo esc_html( $language['name'] ); ?></label><select id="sml-menu-<?php echo esc_attr( md5( wp_json_encode( $group ) ) . '-' . $slug ); ?>" name="sml_menu_translations[<?php echo esc_attr( $slug ); ?>]"><option value=""><?php esc_html_e( '— No separate menu —', 'simple-multilang-blocks' ); ?></option><?php foreach ( $menus as $menu ) : ?><option value="<?php echo esc_attr( $menu->term_id ); ?>" <?php selected( absint( $group[ $slug ] ?? 0 ), $menu->term_id ); ?>><?php echo esc_html( $menu->name ); ?></option><?php endforeach; ?></select></td><?php endforeach; ?>
+                        </tr></tbody></table>
+                        <p><button class="button button-primary"><?php esc_html_e( 'Save menu group', 'simple-multilang-blocks' ); ?></button></p>
+                    </form>
+                <?php endforeach; ?>
+                <h2><?php esc_html_e( 'Custom labels', 'simple-multilang-blocks' ); ?></h2>
+                <p class="description"><?php esc_html_e( 'Page and term labels are replaced automatically. Scan manually entered classic-menu labels and custom navigation-block labels once so they appear under Settings → Interface strings for translation.', 'simple-multilang-blocks' ); ?></p>
+                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_scan_menu_strings' ); ?><input type="hidden" name="action" value="sml_scan_menu_strings"><button class="button button-secondary"><?php esc_html_e( 'Scan navigation labels', 'simple-multilang-blocks' ); ?></button></form>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+
+    public function save_menu_group() {
+        if ( ! current_user_can( 'edit_theme_options' ) ) {
+            wp_die( esc_html__( 'You are not allowed to edit menu language links.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( 'sml_save_menu_group' );
+        $submitted = isset( $_POST['sml_menu_translations'] ) && is_array( $_POST['sml_menu_translations'] ) ? wp_unslash( $_POST['sml_menu_translations'] ) : array();
+        $translations = array();
+        $used = array();
+        foreach ( self::get_languages() as $language => $data ) {
+            $menu_id = absint( $submitted[ $language ] ?? 0 );
+            if ( ! $menu_id ) {
+                continue;
+            }
+            $menu = get_term( $menu_id, 'nav_menu' );
+            if ( ! $menu || is_wp_error( $menu ) || isset( $used[ $menu_id ] ) ) {
+                wp_safe_redirect( add_query_arg( 'sml_menu_error', '1', admin_url( 'themes.php?page=sml-menu-sync' ) ) );
+                exit;
+            }
+            $translations[ $language ] = $menu_id;
+            $used[ $menu_id ] = true;
+        }
+        if ( ! $translations ) {
+            wp_safe_redirect( add_query_arg( 'sml_menu_error', '1', admin_url( 'themes.php?page=sml-menu-sync' ) ) );
+            exit;
+        }
+        self::sync_navigation_menu_translations( $translations );
+        wp_safe_redirect( add_query_arg( 'sml_menu_saved', '1', admin_url( 'themes.php?page=sml-menu-sync' ) ) );
+        exit;
+    }
+
+    /**
+     * Reassigns menu terms without leaving stale relationships in a previous
+     * group. This is deliberately separate from generic term syncing because
+     * a menu can be moved from one language group to another in one save.
+     */
+    public static function sync_navigation_menu_translations( $translations ) {
+        $translations = self::valid_navigation_menu_translations( $translations );
+        if ( ! $translations ) {
+            return false;
+        }
+        $selected_ids = array_values( $translations );
+        $old_groups = array();
+        foreach ( $selected_ids as $menu_id ) {
+            $old = self::valid_navigation_menu_translations( self::get_term_translations( $menu_id ) );
+            if ( ! $old ) {
+                $old = array( self::get_term_language( $menu_id ) => $menu_id );
+            }
+            ksort( $old );
+            $old_groups[ md5( wp_json_encode( $old ) ) ] = $old;
+        }
+        foreach ( $old_groups as $old_group ) {
+            $remaining = array();
+            foreach ( $old_group as $language => $menu_id ) {
+                delete_term_meta( $menu_id, '_sml_translations' );
+                delete_term_meta( $menu_id, '_sml_visible_in' );
+                if ( ! in_array( $menu_id, $selected_ids, true ) ) {
+                    $remaining[ $language ] = $menu_id;
+                }
+            }
+            if ( $remaining ) {
+                self::sync_term_translations( $remaining, false );
+            }
+        }
+        self::sync_term_translations( $translations, false );
+        return true;
+    }
+
+    public function scan_menu_strings() {
+        if ( ! current_user_can( 'edit_theme_options' ) ) {
+            wp_die( esc_html__( 'You are not allowed to scan menu labels.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( 'sml_scan_menu_strings' );
+        $count = 0;
+        foreach ( wp_get_nav_menus() as $menu ) {
+            foreach ( (array) wp_get_nav_menu_items( $menu->term_id ) as $item ) {
+                $source_label = self::classic_menu_item_source_label( $item );
+                if ( self::menu_item_has_custom_label( $item->title, $source_label, $item->type ) && '' !== trim( wp_strip_all_tags( $item->title ) ) ) {
+                    self::register_string( 'menu-item', 'item:' . absint( $item->ID ), sanitize_text_field( wp_strip_all_tags( $item->title ) ) );
+                    ++$count;
+                }
+            }
+        }
+        $navigation_posts = get_posts( array( 'post_type' => 'wp_navigation', 'post_status' => 'any', 'posts_per_page' => -1, 'suppress_filters' => true ) );
+        foreach ( $navigation_posts as $navigation ) {
+            self::catalogue_navigation_block_strings( parse_blocks( $navigation->post_content ), $count );
+        }
+        wp_safe_redirect( add_query_arg( 'sml_menu_scanned', $count, admin_url( 'themes.php?page=sml-menu-sync' ) ) );
+        exit;
+    }
+
+    private static function navigation_menu_groups( $menus ) {
+        $groups = array();
+        $seen = array();
+        foreach ( (array) $menus as $menu ) {
+            $menu_id = absint( $menu->term_id );
+            if ( ! $menu_id ) {
+                continue;
+            }
+            $translations = self::valid_navigation_menu_translations( self::get_term_translations( $menu_id ) );
+            if ( ! $translations ) {
+                $translations = array( self::get_term_language( $menu_id ) => $menu_id );
+            }
+            ksort( $translations );
+            $key = md5( wp_json_encode( $translations ) );
+            if ( isset( $seen[ $key ] ) ) {
+                continue;
+            }
+            $seen[ $key ] = true;
+            $groups[] = $translations;
+        }
+        return $groups;
+    }
+
+    private static function valid_navigation_menu_translations( $translations ) {
+        $result = array();
+        foreach ( (array) $translations as $language => $menu_id ) {
+            $language = sanitize_key( $language );
+            $menu_id = absint( $menu_id );
+            $menu = $menu_id ? get_term( $menu_id, 'nav_menu' ) : false;
+            if ( ! isset( self::get_languages()[ $language ] ) || ! $menu || is_wp_error( $menu ) || in_array( $menu_id, $result, true ) ) {
+                continue;
+            }
+            $result[ $language ] = $menu_id;
+        }
+        return $result;
+    }
+
+    private static function classic_menu_item_source_label( $item ) {
+        if ( 'post_type' === $item->type ) {
+            return sanitize_text_field( wp_strip_all_tags( get_the_title( absint( $item->object_id ) ) ) );
+        }
+        if ( 'taxonomy' === $item->type ) {
+            $term = get_term( absint( $item->object_id ), $item->object );
+            return $term && ! is_wp_error( $term ) ? sanitize_text_field( wp_strip_all_tags( $term->name ) ) : '';
+        }
+        return '';
+    }
+
+    private static function catalogue_navigation_block_strings( $blocks, &$count ) {
+        foreach ( (array) $blocks as $block ) {
+            $name = isset( $block['blockName'] ) ? (string) $block['blockName'] : '';
+            $attributes = isset( $block['attrs'] ) && is_array( $block['attrs'] ) ? $block['attrs'] : array();
+            if ( in_array( $name, array( 'core/navigation-link', 'core/navigation-submenu' ), true ) ) {
+                $label = isset( $attributes['label'] ) ? (string) $attributes['label'] : '';
+                $source_label = self::navigation_block_source_label( $attributes );
+                $kind = sanitize_key( $attributes['kind'] ?? '' );
+                if ( '' !== trim( wp_strip_all_tags( $label ) ) && self::menu_item_has_custom_label( $label, $source_label, 'custom' === $kind ? 'custom' : 'linked' ) ) {
+                    self::register_string( 'navigation-block', self::navigation_block_string_name( $attributes ), sanitize_text_field( wp_strip_all_tags( $label ) ) );
+                    ++$count;
+                }
+            }
+            if ( ! empty( $block['innerBlocks'] ) ) {
+                self::catalogue_navigation_block_strings( $block['innerBlocks'], $count );
+            }
+        }
+    }
+
+    private static function navigation_block_source_label( $attributes ) {
+        $kind = sanitize_key( $attributes['kind'] ?? '' );
+        $source_id = absint( $attributes['id'] ?? 0 );
+        if ( 'post-type' === $kind && $source_id ) {
+            return sanitize_text_field( wp_strip_all_tags( get_the_title( $source_id ) ) );
+        }
+        if ( 'taxonomy' === $kind && $source_id && ! empty( $attributes['type'] ) ) {
+            $term = get_term( $source_id, sanitize_key( $attributes['type'] ) );
+            return $term && ! is_wp_error( $term ) ? sanitize_text_field( wp_strip_all_tags( $term->name ) ) : '';
+        }
+        return '';
     }
 
     public function register_settings_page() {

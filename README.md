@@ -9,12 +9,13 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 - No content is sent to a translation service until an editor explicitly uses **Auto-translate**.
 - API keys are read only from `wp-config.php`, never from the database or the WordPress settings screen.
 - Machine translations are saved only as drafts marked **Requires review**. They are never automatically published.
+- Navigation links are resolved only from validated post, term and menu relationships; unavailable links are omitted instead of pointing to another language.
 - There is no telemetry and no request/content debug logging.
 - GitHub updates are read from release metadata. Public repositories need no token or paid service; private repositories can use an optional read-only token defined in `wp-config.php`, never in a WordPress option.
 
 ## Release process
 
-Push a semantic-version tag such as `v1.4.3`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
+Push a semantic-version tag such as `v1.5.0`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
@@ -37,6 +38,12 @@ Translations are applied only to the public site interface by default. The WordP
 ## Language switcher appearance
 
 Switcher placement and appearance are stored per active theme. **Use theme colors** inherits `theme.json` colour presets when available; light, dark and minimal variants are also available. A theme-specific CSS class can be supplied for a project's own style layer.
+
+## Menus
+
+One shared classic menu stays structurally in sync: its linked page, product and taxonomy links are replaced with the counterpart in the active language. If an object is not available in that language, the menu item and its child items are omitted rather than linking visitors to the wrong language.
+
+For language-specific custom links or labels, create a classic menu per language and link them at **Appearance → Multilingual menus**. The normal `wp_nav_menu()` call then chooses the matching menu automatically. The same object-link mapping applies to the Site Editor's Navigation block, including linked `wp_navigation` posts. Use **Scan navigation labels** once to add manual classic-menu labels and custom Navigation-block labels to **Settings → Interface strings**; their translations remain public-interface-only.
 
 ## Automatic translations
 

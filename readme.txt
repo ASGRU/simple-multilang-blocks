@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.4.3
+Stable tag: 1.5.0
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -13,6 +13,7 @@ A lightweight multilingual layer for block-based WordPress sites.
 
 * Post, page, WooCommerce product and taxonomy translation relationships.
 * Language-prefixed URLs, a styled automatic/shortcode language switcher and hreflang tags.
+* Shared and language-specific classic menus, plus Site Editor Navigation block links, follow the active language.
 * WPML migration for content relationships and String Translation entries.
 * Public-interface string screen for the active theme and selected plugins.
 * Manual draft creation and editor-triggered DeepL/OpenAI translations through a bounded background queue, always marked for review.
@@ -54,6 +55,10 @@ Open **Settings → Interface strings** to edit strings from the active theme an
 == Language switcher ==
 
 The switcher can be automatic or shortcode-only, and is also available as a Gutenberg block. Its appearance is stored per active theme: theme colours, light, dark or minimal. Add a theme-specific CSS class when a project needs its own styling layer.
+
+== Menus ==
+
+A shared menu maps linked page, product and term links to the active language. If no counterpart is available, the item and its descendants are omitted instead of creating a wrong-language link. For language-specific custom links or labels, create one classic menu per language and connect them under **Appearance → Multilingual menus**. `wp_nav_menu()` then picks the matching menu. Navigation blocks in the Site Editor map linked links and `wp_navigation` references in the same way. Use **Scan navigation labels** to expose hand-written menu labels in **Settings → Interface strings**.
 
 == License ==
 
