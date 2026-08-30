@@ -415,20 +415,27 @@ final class SML_Core {
     }
 
     public function redirect_noncanonical_language_url() {
-        if ( is_admin() || wp_doing_ajax() || ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) || ! is_singular() ) {
+        if ( is_admin() || wp_doing_ajax() || ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) ) {
             return;
         }
-        $post_id = get_queried_object_id();
-        $post = $post_id ? get_post( $post_id ) : false;
-        if ( ! $post || ! in_array( $post->post_type, self::get_post_types(), true ) ) {
+        if ( get_query_var( 'sml_language' ) || isset( $_GET['lang'] ) ) {
             return;
         }
-        $language = self::get_post_language( $post_id );
-        if ( $language === self::get_default_language() || get_query_var( 'sml_language' ) || isset( $_GET['lang'] ) ) {
-            return;
+        if ( is_singular() ) {
+            $post_id = get_queried_object_id();
+            $post = $post_id ? get_post( $post_id ) : false;
+            if ( $post && in_array( $post->post_type, self::get_post_types(), true ) && self::get_post_language( $post_id ) !== self::get_default_language() ) {
+                wp_safe_redirect( get_permalink( $post_id ), 301 );
+                exit;
+            }
         }
-        wp_safe_redirect( get_permalink( $post_id ), 301 );
-        exit;
+        if ( is_tax() || is_category() || is_tag() ) {
+            $term = get_queried_object();
+            if ( $term && ! is_wp_error( $term ) && in_array( $term->taxonomy, self::get_taxonomies(), true ) && self::get_term_language( $term->term_id ) !== self::get_default_language() ) {
+                wp_safe_redirect( get_term_link( $term ), 301 );
+                exit;
+            }
+        }
     }
 
     public function output_hreflang() {
