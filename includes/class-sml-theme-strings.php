@@ -171,12 +171,14 @@ final class SML_Theme_Strings {
         $search = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
         $page = max( 1, absint( $_GET['paged'] ?? 1 ) );
         $per_page = 20;
-        $where = "(context LIKE 'theme:%' OR context LIKE 'plugin:%')";
+        // Imported WPML String Translation records keep their original context
+        // so a site can continue to edit its known interface strings.
+        $where = '1=1';
         $args = array();
         if ( '' !== $search ) {
-            $where .= ' AND (name LIKE %s OR source_value LIKE %s)';
+            $where .= ' AND (context LIKE %s OR name LIKE %s OR source_value LIKE %s)';
             $like = '%' . $wpdb->esc_like( $search ) . '%';
-            $args = array( $like, $like );
+            $args = array( $like, $like, $like );
         }
         $count_sql = "SELECT COUNT(*) FROM {$strings_table} WHERE {$where}";
         $total = (int) ( $args ? $wpdb->get_var( $wpdb->prepare( $count_sql, $args ) ) : $wpdb->get_var( $count_sql ) );
@@ -188,7 +190,7 @@ final class SML_Theme_Strings {
         ?>
         <div class="wrap sml-admin-wrap">
             <h1><?php esc_html_e( 'Interface strings', 'simple-multilang-blocks' ); ?></h1>
-            <p class="description"><?php esc_html_e( 'Strings are sourced from the active theme and the selected plugins. Their existing source text is retained as a fallback; translations are applied only to the public site interface and never modify source, PO or MO files.', 'simple-multilang-blocks' ); ?></p>
+            <p class="description"><?php esc_html_e( 'Strings come from the active theme, selected plugins and imported WPML String Translation records. Their existing source text is retained as a fallback; translations apply only to the public site interface and never modify source, PO or MO files.', 'simple-multilang-blocks' ); ?></p>
             <?php if ( isset( $_GET['scanned'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Theme and selected plugin strings were catalogued.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
             <?php if ( isset( $_GET['saved'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'String translations saved.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
 

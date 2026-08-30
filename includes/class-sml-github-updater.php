@@ -3,7 +3,7 @@
 defined( 'ABSPATH' ) || exit;
 
 final class SML_GitHub_Updater {
-    const TRANSIENT_KEY = 'sml_github_release_1_2_5';
+    const TRANSIENT_KEY = 'sml_github_release';
 
     private static $instance;
 
@@ -107,6 +107,7 @@ final class SML_GitHub_Updater {
         $headers = array(
             'Accept'     => 'application/vnd.github+json',
             'User-Agent' => 'Simple-Multilang-Blocks/' . SML_VERSION,
+            'X-GitHub-Api-Version' => '2022-11-28',
         );
 
         /* For private repositories define SML_GITHUB_TOKEN in wp-config.php. */

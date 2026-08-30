@@ -20,7 +20,7 @@ A lightweight multilingual layer for block-based WordPress sites.
 
 == Updating from GitHub ==
 
-This public repository uses GitHub Releases. Create a release whose tag is a semantic version (for example `v1.2.5`) and attach an asset named `simple-multilang-blocks.zip`. WordPress then shows the normal update notification; no token or paid service is needed.
+For a public GitHub repository, create a release whose tag is a semantic version (for example `v1.3.0`) and attach an asset named `simple-multilang-blocks.zip`. WordPress then shows the normal update notification; no token or paid service is needed.
 
 For a private repository, set a fine-grained read-only token in `wp-config.php`:
 
@@ -58,4 +58,4 @@ GPL-2.0-or-later. This plugin is free software: you may use, study, modify and r
 
 Take a database backup. In the plugin settings use **Import WPML data**, or run `wp sml migrate_wpml --dry-run` followed by `wp sml migrate_wpml --yes`.
 
-The importer does not delete WPML tables, settings or plugin files. Verify representative pages, product categories and translated interface strings before removing WPML from disk.
+The importer does not delete WPML tables, settings or plugin files. It recreates relationships only where WPML has a real multi-language translation group; standalone records remain language-labelled and are never guessed into a relationship. Verify representative pages, product categories and translated interface strings before removing WPML from disk.

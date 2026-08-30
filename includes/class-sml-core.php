@@ -37,6 +37,8 @@ final class SML_Core {
         add_filter( 'page_link', array( $this, 'filter_page_link' ), 20, 3 );
         add_filter( 'post_type_link', array( $this, 'filter_post_type_link' ), 20, 2 );
         add_filter( 'term_link', array( $this, 'filter_term_link' ), 20, 3 );
+        add_filter( 'wp_nav_menu_args', array( $this, 'map_navigation_menu' ), 20 );
+        add_filter( 'wp_nav_menu_objects', array( $this, 'map_navigation_menu_objects' ), 20, 2 );
         add_filter( 'language_attributes', array( $this, 'filter_language_attributes' ), 20, 2 );
         add_action( 'wp_head', array( $this, 'output_hreflang' ), 1 );
         add_filter( 'redirect_canonical', array( $this, 'prevent_language_canonical_redirect' ), 10, 2 );
@@ -286,6 +288,10 @@ final class SML_Core {
         if ( ! empty( $wp->query_vars['sml_home'] ) ) {
             $front_page = (int) get_option( 'page_on_front' );
             if ( $front_page ) {
+                $translations = self::get_post_translations( $front_page );
+                if ( ! empty( $translations[ $language ] ) && self::is_public_post( $translations[ $language ] ) ) {
+                    $front_page = (int) $translations[ $language ];
+                }
                 $wp->query_vars['page_id'] = $front_page;
             }
             return;
@@ -356,6 +362,13 @@ final class SML_Core {
             return 0;
         }
 
+        // Resolve a complete hierarchical path first. A basename-only lookup
+        // cannot distinguish pages such as /services/print/ and /blog/print/.
+        $hierarchical = get_page_by_path( $path, OBJECT, $post_types );
+        if ( $hierarchical && self::post_is_visible_in_language( $hierarchical->ID, $language ) ) {
+            return (int) $hierarchical->ID;
+        }
+
         $placeholders = implode( ',', array_fill( 0, count( $post_types ), '%s' ) );
         $post_name = sanitize_title( basename( $path ) );
         if ( ! $post_name ) {
@@ -365,6 +378,18 @@ final class SML_Core {
         $sql = "SELECT DISTINCT p.ID FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = '_sml_language' LEFT JOIN {$wpdb->postmeta} visible ON visible.post_id = p.ID AND visible.meta_key = '_sml_visible_in' WHERE p.post_name = %s AND ( pm.meta_value = %s OR visible.meta_value = %s ) AND p.post_type IN ({$placeholders}) AND p.post_status IN ('publish', 'private') ORDER BY ( pm.meta_value = %s ) DESC, p.ID ASC LIMIT 1";
         $values = array_merge( array( $post_name, $language, $language ), $post_types, array( $language ) );
         return (int) $wpdb->get_var( $wpdb->prepare( $sql, $values ) );
+    }
+
+    private static function post_is_visible_in_language( $post_id, $language ) {
+        $post = get_post( $post_id );
+        if ( ! $post || ! self::is_public_post( $post->ID ) ) {
+            return false;
+        }
+        return self::get_post_language( $post->ID ) === $language || in_array( $language, get_post_meta( $post->ID, '_sml_visible_in', false ), true );
+    }
+
+    private static function is_public_post( $post_id ) {
+        return 'publish' === get_post_status( $post_id );
     }
 
     private static function find_term_by_slug( $taxonomy, $slug, $language ) {
@@ -424,10 +449,69 @@ final class SML_Core {
         return self::add_language_to_url( $url, self::get_term_language( $term->term_id ) );
     }
 
+    /**
+     * Switch a separately translated classic menu before WordPress renders it.
+     */
+    public function map_navigation_menu( $args ) {
+        if ( is_admin() && ! wp_doing_ajax() ) {
+            return $args;
+        }
+
+        $menu = ! empty( $args['menu'] ) ? wp_get_nav_menu_object( $args['menu'] ) : false;
+        if ( ! $menu && ! empty( $args['theme_location'] ) ) {
+            $locations = get_nav_menu_locations();
+            $menu = ! empty( $locations[ $args['theme_location'] ] ) ? wp_get_nav_menu_object( $locations[ $args['theme_location'] ] ) : false;
+        }
+        if ( ! $menu || is_wp_error( $menu ) ) {
+            return $args;
+        }
+
+        $translations = self::get_term_translations( $menu->term_id );
+        $target = ! empty( $translations[ self::get_current_language() ] ) ? absint( $translations[ self::get_current_language() ] ) : 0;
+        $target_menu = $target ? get_term( $target, 'nav_menu' ) : false;
+        if ( $target_menu && ! is_wp_error( $target_menu ) ) {
+            $args['menu'] = $target;
+        }
+
+        return $args;
+    }
+
+    /**
+     * A shared WordPress menu can keep its structure while linked objects
+     * follow the active language. This also covers legacy WPML menu mappings.
+     */
+    public function map_navigation_menu_objects( $items, $menu ) {
+        if ( is_admin() && ! wp_doing_ajax() ) {
+            return $items;
+        }
+
+        $language = self::get_current_language();
+        foreach ( $items as $item ) {
+            if ( 'post_type' === $item->type ) {
+                $translations = self::get_post_translations( $item->object_id );
+                $target = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+                if ( $target && self::is_public_post( $target ) ) {
+                    $item->object_id = $target;
+                    $item->url = get_permalink( $target );
+                }
+            } elseif ( 'taxonomy' === $item->type ) {
+                $translations = self::get_term_translations( $item->object_id );
+                $target = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+                $term = $target ? get_term( $target, $item->object ) : false;
+                if ( $term && ! is_wp_error( $term ) ) {
+                    $item->object_id = $target;
+                    $item->url = get_term_link( $term );
+                }
+            }
+        }
+
+        return $items;
+    }
+
     private static function add_language_to_url( $url, $language ) {
         $url = str_replace( '/./', '/', $url );
         $languages = self::get_languages();
-        if ( ! $language || ! isset( $languages[ $language ] ) || $language === self::get_default_language() ) {
+        if ( ! $language || ! isset( $languages[ $language ] ) ) {
             return $url;
         }
 
@@ -447,11 +531,15 @@ final class SML_Core {
             $path = '/' . ltrim( substr( $path, strlen( $home_path ) ), '/' );
         }
 
-        if ( preg_match( '#^/' . preg_quote( $language, '#' ) . '(?:/|$)#', $path ) ) {
-            return $url;
+        foreach ( array_keys( $languages ) as $known_language ) {
+            if ( preg_match( '#^/' . preg_quote( $known_language, '#' ) . '(?:/|$)#', $path ) ) {
+                $path = '/' . ltrim( substr( $path, strlen( $known_language ) + 1 ), '/' );
+                break;
+            }
         }
 
-        $localized = home_url( '/' . rawurlencode( $language ) . '/' . ltrim( $path, '/' ) );
+        $prefix = $language === self::get_default_language() ? '' : rawurlencode( $language ) . '/';
+        $localized = home_url( '/' . $prefix . ltrim( $path, '/' ) );
         if ( ! empty( $parts['query'] ) ) {
             $localized .= '?' . $parts['query'];
         }
@@ -531,7 +619,9 @@ final class SML_Core {
                 $translations[ self::get_post_language( $post_id ) ] = $post_id;
             }
             foreach ( $translations as $language => $post_id ) {
-                $this->print_hreflang( $language, get_permalink( $post_id ) );
+                if ( self::is_public_post( $post_id ) ) {
+                    $this->print_hreflang( $language, get_permalink( $post_id ) );
+                }
             }
             return;
         }
@@ -571,14 +661,9 @@ final class SML_Core {
         if ( is_singular() ) {
             $post_id = get_queried_object_id();
             $translations = self::get_post_translations( $post_id );
-            if ( $translations ) {
-                foreach ( $translations as $language => $post_id ) {
-                    $links[ $language ] = get_permalink( $post_id );
-                }
-            } else {
-                foreach ( self::get_languages() as $language => $data ) {
-                    $links[ $language ] = self::add_language_to_url( get_permalink( $post_id ), $language );
-                }
+            foreach ( self::get_languages() as $language => $data ) {
+                $translated_post_id = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+                $links[ $language ] = $translated_post_id && self::is_public_post( $translated_post_id ) ? get_permalink( $translated_post_id ) : self::add_language_to_url( get_permalink( $post_id ), $language );
             }
         } elseif ( is_tax() || is_category() || is_tag() ) {
             $term = get_queried_object();

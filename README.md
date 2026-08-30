@@ -10,11 +10,11 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 - API keys are read only from `wp-config.php`, never from the database or the WordPress settings screen.
 - Machine translations are saved only as drafts marked **Requires review**. They are never automatically published.
 - There is no telemetry and no request/content debug logging.
-- GitHub updates are read from public release metadata. No token or paid service is required. Private forks can use an optional read-only token defined in `wp-config.php`, never in a WordPress option.
+- GitHub updates are read from release metadata. Public repositories need no token or paid service; private repositories can use an optional read-only token defined in `wp-config.php`, never in a WordPress option.
 
 ## Release process
 
-Push a semantic-version tag such as `v1.2.5`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a public GitHub Release. WordPress discovers it on the usual plugin-update schedule.
+Push a semantic-version tag such as `v1.3.0`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
@@ -25,7 +25,7 @@ Simple Multilang Blocks is free software, released under the GNU General Public 
 1. Back up the database.
 2. Run `wp sml migrate_wpml --dry-run`.
 3. Run `wp sml migrate_wpml --yes`.
-4. Verify pages, WooCommerce product/category archives, navigation and translated interface strings.
+4. Verify pages, WooCommerce product/category archives, navigation and translated interface strings. The importer recreates relationships only where WPML has a multi-language translation group; standalone source records keep their language label and are not guessed into a relationship.
 5. Deactivate WPML only after verification. The importer never deletes WPML data.
 
 ## Editing interface strings

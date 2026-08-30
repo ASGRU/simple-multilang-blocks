@@ -18,14 +18,19 @@ final class SML_WPML_Migrator {
         $result = array(
             'languages'           => 0,
             'post_groups'         => 0,
+            'linked_post_groups'  => 0,
+            'special_post_groups' => 0,
             'posts'               => 0,
             'term_groups'         => 0,
+            'linked_term_groups'  => 0,
+            'menu_groups'         => 0,
             'terms'               => 0,
             'strings'             => 0,
             'string_translations' => 0,
         );
 
-        $languages = self::migrate_languages( $languages_table, $dry_run );
+        $settings = get_option( 'icl_sitepress_settings', array() );
+        $languages = self::migrate_languages( $languages_table, $settings, $dry_run );
         $result['languages'] = count( $languages );
         if ( ! $languages ) {
             throw new RuntimeException( 'WPML has no active languages to import.' );
@@ -37,7 +42,11 @@ final class SML_WPML_Migrator {
         $result = array_merge( $result, $post_result, $term_result );
 
         if ( self::table_exists( $strings_table ) && self::table_exists( $string_translations_table ) ) {
-            $result = array_merge( $result, self::migrate_strings( $strings_table, $string_translations_table, array_keys( $languages ), $dry_run ) );
+            $result = array_merge( $result, self::migrate_strings( $strings_table, $string_translations_table, array_keys( $languages ), $default_language, $dry_run ) );
+        }
+
+        if ( ! $dry_run ) {
+            self::migrate_supported_settings( $settings, $languages, $default_language, $result );
         }
 
         return $result;
@@ -58,10 +67,10 @@ final class SML_WPML_Migrator {
         return $table === $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
     }
 
-    private static function migrate_languages( $table, $dry_run ) {
+    private static function migrate_languages( $table, $settings, $dry_run ) {
         global $wpdb;
-        $settings = get_option( 'icl_sitepress_settings', array() );
         $default = ! empty( $settings['default_language'] ) ? sanitize_key( $settings['default_language'] ) : '';
+        $fallbacks = SML_Core::default_languages();
         $rows = $wpdb->get_results( "SELECT code, english_name, default_locale FROM {$table} WHERE active = 1 ORDER BY code", ARRAY_A );
         $languages = array();
         foreach ( $rows as $row ) {
@@ -69,10 +78,15 @@ final class SML_WPML_Migrator {
             if ( ! $slug ) {
                 continue;
             }
+            $code = str_replace( '_', '-', sanitize_text_field( $row['default_locale'] ) );
+            if ( ! preg_match( '/^[a-z]{2,3}-[A-Z]{2}$/', $code ) && ! empty( $fallbacks[ $slug ]['code'] ) ) {
+                $code = $fallbacks[ $slug ]['code'];
+            }
             $languages[ $slug ] = array(
                 'slug'       => $slug,
-                'code'       => str_replace( '_', '-', sanitize_text_field( $row['default_locale'] ) ),
-                'name'       => sanitize_text_field( $row['english_name'] ),
+                'code'       => $code,
+                'name'       => ! empty( $fallbacks[ $slug ]['name'] ) ? $fallbacks[ $slug ]['name'] : sanitize_text_field( $row['english_name'] ),
+                'flag'       => SML_Core::get_language_flag( $slug ),
                 'is_default' => $slug === $default,
             );
         }
@@ -88,43 +102,49 @@ final class SML_WPML_Migrator {
 
     private static function migrate_posts( $table, $languages, $default_language, $dry_run ) {
         global $wpdb;
-        $public = get_post_types( array( 'public' => true ), 'names' );
-        unset( $public['attachment'] );
-        if ( ! $public ) {
-            return array( 'post_groups' => 0, 'posts' => 0 );
+        $public = self::get_routable_post_types();
+        $special = self::get_related_post_types();
+        $all_post_types = array_values( array_unique( array_merge( $public, $special ) ) );
+        if ( ! $all_post_types ) {
+            return array( 'post_groups' => 0, 'linked_post_groups' => 0, 'special_post_groups' => 0, 'posts' => 0 );
         }
 
         $element_types = array();
-        foreach ( $public as $post_type ) {
+        foreach ( $all_post_types as $post_type ) {
             $element_types[] = 'post_' . $post_type;
         }
         $placeholders = implode( ',', array_fill( 0, count( $element_types ), '%s' ) );
-        $sql = "SELECT tr.trid, tr.element_type, tr.element_id, tr.language_code FROM {$table} tr INNER JOIN {$wpdb->posts} p ON p.ID = tr.element_id WHERE tr.element_type IN ({$placeholders}) AND p.post_type IN (" . implode( ',', array_fill( 0, count( $public ), '%s' ) ) . ')';
-        $rows = $wpdb->get_results( $wpdb->prepare( $sql, array_merge( $element_types, array_values( $public ) ) ), ARRAY_A );
+        $sql = "SELECT tr.trid, tr.element_type, tr.element_id, tr.language_code FROM {$table} tr INNER JOIN {$wpdb->posts} p ON p.ID = tr.element_id WHERE tr.element_type IN ({$placeholders}) AND p.post_type IN (" . implode( ',', array_fill( 0, count( $all_post_types ), '%s' ) ) . ')';
+        $rows = $wpdb->get_results( $wpdb->prepare( $sql, array_merge( $element_types, $all_post_types ) ), ARRAY_A );
         $groups = self::group_rows( $rows, $languages );
-        $post_types = array_values( $public );
+        $special_groups = self::filter_related_groups( $groups, $special );
+        $public_groups = self::filter_groups_for_post_types( $groups, $public );
+        $linked_public_groups = self::filter_linked_groups( $public_groups );
+        $groups_to_sync = array_merge( $public_groups, $special_groups );
 
         if ( ! $dry_run ) {
-            update_option( SML_Core::OPTION_POST_TYPES, $post_types );
-            foreach ( $groups as $translations ) {
+            update_option( SML_Core::OPTION_POST_TYPES, array_values( $public ) );
+            foreach ( $groups_to_sync as $translations ) {
                 SML_Core::sync_post_translations( $translations );
             }
         }
 
-        $fallback_posts = $dry_run ? self::count_unmapped_posts( $post_types ) : self::backfill_unmapped_posts( $post_types, $default_language );
+        $fallback_posts = $dry_run ? self::count_unmapped_posts( $public ) : self::backfill_unmapped_posts( $public, $default_language );
 
         return array(
-            'post_groups'    => count( $groups ),
-            'posts'          => self::count_grouped_objects( $groups ) + $fallback_posts,
+            'post_groups'    => count( $public_groups ),
+            'linked_post_groups' => count( $linked_public_groups ),
+            'special_post_groups' => count( $special_groups ),
+            'posts'          => self::count_grouped_objects( $groups_to_sync ) + $fallback_posts,
             'fallback_posts' => $fallback_posts,
         );
     }
 
     private static function migrate_terms( $table, $languages, $default_language, $dry_run ) {
         global $wpdb;
-        $taxonomies = get_taxonomies( array( 'show_ui' => true ), 'names' );
+        $taxonomies = self::get_migratable_taxonomies();
         if ( ! $taxonomies ) {
-            return array( 'term_groups' => 0, 'terms' => 0 );
+            return array( 'term_groups' => 0, 'linked_term_groups' => 0, 'terms' => 0 );
         }
         $element_types = array();
         foreach ( $taxonomies as $taxonomy ) {
@@ -134,6 +154,8 @@ final class SML_WPML_Migrator {
         $sql = "SELECT tr.trid, tr.element_type, tt.term_id AS element_id, tr.language_code FROM {$table} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.element_id WHERE tr.element_type IN ({$placeholders})";
         $rows = $wpdb->get_results( $wpdb->prepare( $sql, $element_types ), ARRAY_A );
         $groups = self::group_rows( $rows, $languages );
+        $linked_groups = self::filter_linked_groups( $groups );
+        $menu_groups = self::filter_groups_for_taxonomies( $groups, array( 'nav_menu' ) );
 
         if ( ! $dry_run ) {
             update_option( SML_Core::OPTION_TAXONOMIES, array_values( $taxonomies ) );
@@ -146,6 +168,8 @@ final class SML_WPML_Migrator {
 
         return array(
             'term_groups'   => count( $groups ),
+            'linked_term_groups' => count( $linked_groups ),
+            'menu_groups'   => count( $menu_groups ),
             'terms'         => self::count_grouped_objects( $groups ) + $fallback_terms,
             'fallback_terms'=> $fallback_terms,
         );
@@ -228,6 +252,64 @@ final class SML_WPML_Migrator {
         return $groups;
     }
 
+    private static function get_routable_post_types() {
+        $post_types = get_post_types( array( 'public' => true ), 'names' );
+        unset( $post_types['attachment'] );
+        return array_values( $post_types );
+    }
+
+    private static function get_related_post_types() {
+        $supported = array( 'product_variation', 'wp_template', 'wp_template_part', 'wp_navigation', 'wp_global_styles', 'wp_block' );
+        $existing = get_post_types( array(), 'names' );
+        return array_values( array_intersect( $supported, $existing ) );
+    }
+
+    private static function get_migratable_taxonomies() {
+        $taxonomies = get_taxonomies( array( 'show_ui' => true ), 'names' );
+        if ( taxonomy_exists( 'nav_menu' ) ) {
+            $taxonomies[] = 'nav_menu';
+        }
+        $excluded = array( 'product_visibility', 'translation_priority', 'wp_theme', 'wp_template_part_area' );
+        return array_values( array_diff( array_unique( $taxonomies ), $excluded ) );
+    }
+
+    private static function filter_groups_for_post_types( $groups, $post_types ) {
+        $result = array();
+        foreach ( $groups as $key => $group ) {
+            $element_type = strtok( $key, ':' );
+            if ( 0 === strpos( $element_type, 'post_' ) && in_array( substr( $element_type, 5 ), $post_types, true ) ) {
+                $result[ $key ] = $group;
+            }
+        }
+        return $result;
+    }
+
+    private static function filter_groups_for_taxonomies( $groups, $taxonomies ) {
+        $result = array();
+        foreach ( $groups as $key => $group ) {
+            $element_type = strtok( $key, ':' );
+            if ( 0 === strpos( $element_type, 'tax_' ) && in_array( substr( $element_type, 4 ), $taxonomies, true ) ) {
+                $result[ $key ] = $group;
+            }
+        }
+        return $result;
+    }
+
+    private static function filter_related_groups( $groups, $post_types ) {
+        return self::filter_linked_groups( self::filter_groups_for_post_types( $groups, $post_types ) );
+    }
+
+    private static function filter_linked_groups( $groups ) {
+        foreach ( $groups as $key => $group ) {
+            // A singleton has no translated counterpart; its language label is
+            // still imported, but no relationship can be reconstructed.
+            if ( count( $group ) < 2 ) {
+                unset( $groups[ $key ] );
+            }
+        }
+        return $groups;
+    }
+
     private static function count_grouped_objects( $groups ) {
         $count = 0;
         foreach ( $groups as $group ) {
@@ -236,7 +318,7 @@ final class SML_WPML_Migrator {
         return $count;
     }
 
-    private static function migrate_strings( $strings_table, $translations_table, $languages, $dry_run ) {
+    private static function migrate_strings( $strings_table, $translations_table, $languages, $default_language, $dry_run ) {
         global $wpdb;
         $result = array( 'strings' => 0, 'string_translations' => 0 );
         $source_rows = $wpdb->get_results( "SELECT id, language, context, name, value FROM {$strings_table}", ARRAY_A );
@@ -257,7 +339,11 @@ final class SML_WPML_Migrator {
                 continue;
             }
             $key = hash( 'sha256', $context . "\0" . $name );
-            $wpdb->query( $wpdb->prepare( "INSERT INTO {$destination} (string_key, context, name, source_language, source_value) VALUES (%s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE source_language = VALUES(source_language), source_value = VALUES(source_value)", $key, $context, $name, sanitize_key( $row['language'] ), (string) $row['value'] ) );
+            $source_language = sanitize_key( $row['language'] );
+            if ( ! in_array( $source_language, $languages, true ) ) {
+                $source_language = $default_language;
+            }
+            $wpdb->query( $wpdb->prepare( "INSERT INTO {$destination} (string_key, context, name, source_language, source_value) VALUES (%s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE source_language = VALUES(source_language), source_value = VALUES(source_value)", $key, $context, $name, $source_language, (string) $row['value'] ) );
             $mapped_ids[ (int) $row['id'] ] = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$destination} WHERE string_key = %s", $key ) );
         }
 
@@ -278,10 +364,35 @@ final class SML_WPML_Migrator {
             if ( ! $string_id || ! in_array( $language, $languages, true ) ) {
                 continue;
             }
-            $wpdb->query( $wpdb->prepare( "INSERT INTO {$destination_translations} (string_id, language, value, updated_at) VALUES (%d, %s, %s, %s) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)", $string_id, $language, (string) $row['value'], current_time( 'mysql', true ) ) );
+            $wpdb->query( $wpdb->prepare( "INSERT INTO {$destination_translations} (string_id, language, value, status, updated_at) VALUES (%d, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE value = VALUES(value), status = VALUES(status), updated_at = VALUES(updated_at)", $string_id, $language, (string) $row['value'], 'verified', current_time( 'mysql', true ) ) );
             ++$result['string_translations'];
         }
 
         return $result;
+    }
+
+    /**
+     * Records only the WPML settings that SML can safely preserve. URL mode,
+     * add-ons and WPML's internal custom-field rules deliberately stay owned by
+     * WPML; SML has one predictable language-folder routing model.
+     */
+    private static function migrate_supported_settings( $settings, $languages, $default_language, $result ) {
+        $custom_types = ! empty( $settings['custom_types_translation'] ) && is_array( $settings['custom_types_translation'] ) ? $settings['custom_types_translation'] : array();
+        $taxonomies = ! empty( $settings['taxonomies_translation'] ) && is_array( $settings['taxonomies_translation'] ) ? $settings['taxonomies_translation'] : array();
+
+        update_option(
+            'sml_wpml_migration_summary',
+            array(
+                'imported_at'                    => current_time( 'mysql', true ),
+                'source_default_language'         => $default_language,
+                'active_languages'                => array_keys( $languages ),
+                'source_language_negotiation'     => isset( $settings['language_negotiation_type'] ) ? absint( $settings['language_negotiation_type'] ) : 0,
+                'source_custom_post_type_rules'   => array_keys( $custom_types ),
+                'source_taxonomy_rules'           => array_keys( $taxonomies ),
+                'url_mode'                        => 'sml-language-folders',
+                'last_import_counts'              => array_intersect_key( $result, array_flip( array( 'post_groups', 'linked_post_groups', 'term_groups', 'linked_term_groups', 'strings', 'string_translations' ) ) ),
+            ),
+            false
+        );
     }
 }

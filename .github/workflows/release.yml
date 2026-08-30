@@ -17,6 +17,7 @@ jobs:
         run: |
           mkdir -p dist/simple-multilang-blocks
           cp simple-multilang-blocks.php readme.txt uninstall.php LICENSE dist/simple-multilang-blocks/
+          cp -R assets dist/simple-multilang-blocks/
           cp -R includes dist/simple-multilang-blocks/
           cd dist
           zip -r simple-multilang-blocks.zip simple-multilang-blocks
