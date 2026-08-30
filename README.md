@@ -69,3 +69,7 @@ When a linked hierarchical page or category has a translated parent, Simple Mult
 Failed automatic translations can be queued again from **Tools → Translation review**. Requeuing does not contact DeepL or OpenAI in the browser request; it restarts the same bounded background process.
 
 WooCommerce product lists—including related-product and block queries—follow the active language. Cart, checkout, account, REST and other administrative/service requests are not filtered by the multilingual layer.
+
+## Taxonomy terms
+
+The term editor now offers **Create linked term** beside every missing language. It copies the source description and safe custom term metadata, maps an already translated parent, links the new term and marks it for review. Existing terms remain linkable by ID, so the plugin never silently merges same-named categories.

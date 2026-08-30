@@ -60,6 +60,79 @@ final class SML_Translation_Service {
     }
 
     /**
+     * Creates a linked taxonomy term ready for an editor to rename, translate
+     * and verify. Terms have no WordPress draft status, so their review state
+     * is stored in metadata and shown by Simple Multilang only.
+     *
+     * @return int|WP_Error
+     */
+    public static function create_manual_term( $source_term_id, $target_language ) {
+        $validation = self::validate_term_request( $source_term_id, $target_language );
+        if ( is_wp_error( $validation ) ) {
+            return $validation;
+        }
+        $source_term_id = absint( $source_term_id );
+        $target_language = sanitize_key( $target_language );
+        $source = get_term( $source_term_id );
+        $translations = SML_Core::get_term_translations( $source_term_id );
+        if ( ! $translations ) {
+            $translations[ SML_Core::get_term_language( $source_term_id ) ] = $source_term_id;
+        }
+
+        $parent = 0;
+        if ( ! empty( $source->parent ) ) {
+            $parent_translations = SML_Core::get_term_translations( $source->parent );
+            $parent = ! empty( $parent_translations[ $target_language ] ) ? absint( $parent_translations[ $target_language ] ) : 0;
+        }
+        $languages = SML_Core::get_languages();
+        // wp_insert_term() refuses a second root term with the same name.
+        // WordPress does permit an existing term to be renamed afterwards, so
+        // create a unique internal value first and then set the editor-facing
+        // translated name through the normal term API.
+        $placeholder = sprintf( '%1$s — %2$s', $source->name, $languages[ $target_language ]['name'] );
+        $created = wp_insert_term(
+            $placeholder,
+            $source->taxonomy,
+            array(
+                'description' => $source->description,
+                'parent'      => $parent,
+                'slug'        => sanitize_title( $source->slug . '-' . $target_language ),
+            )
+        );
+        if ( is_wp_error( $created ) || empty( $created['term_id'] ) ) {
+            if ( is_wp_error( $created ) && 'term_exists' === $created->get_error_code() ) {
+                return new WP_Error( 'sml_term_translation_exists', __( 'A term with this name already exists. Link it by ID instead of creating a duplicate.', 'simple-multilang-blocks' ), array( 'term_id' => absint( $created->get_error_data() ) ) );
+            }
+            return is_wp_error( $created ) ? $created : new WP_Error( 'sml_term_create_failed', __( 'The term translation could not be created.', 'simple-multilang-blocks' ) );
+        }
+
+        $term_id = absint( $created['term_id'] );
+        $updated = wp_update_term(
+            $term_id,
+            $source->taxonomy,
+            array(
+                'name'        => $source->name,
+                'description' => $source->description,
+                'parent'      => $parent,
+                'slug'        => sanitize_title( $source->slug . '-' . $target_language ),
+            )
+        );
+        if ( is_wp_error( $updated ) ) {
+            wp_delete_term( $term_id, $source->taxonomy );
+            return $updated;
+        }
+        self::copy_term_meta( $source_term_id, $term_id );
+        $translations[ $target_language ] = $term_id;
+        SML_Core::sync_term_translations( $translations );
+        update_term_meta( $term_id, '_sml_translation_status', 'draft' );
+        update_term_meta( $term_id, '_sml_translation_source', $source_term_id );
+        update_term_meta( $term_id, '_sml_translation_provider', 'manual' );
+        update_term_meta( $term_id, '_sml_translation_created_at', current_time( 'mysql', true ) );
+
+        return $term_id;
+    }
+
+    /**
      * Adds a translation request to a persistent, retryable queue. No visitor
      * request ever waits for a remote provider, and the queue stores metadata
      * only—never the source text or API credentials.
@@ -266,6 +339,24 @@ final class SML_Translation_Service {
         return true;
     }
 
+    private static function validate_term_request( $source_term_id, $target_language ) {
+        $source_term_id = absint( $source_term_id );
+        $target_language = sanitize_key( $target_language );
+        $term = get_term( $source_term_id );
+        $languages = SML_Core::get_languages();
+        if ( ! $term || is_wp_error( $term ) || ! in_array( $term->taxonomy, SML_Core::get_taxonomies(), true ) ) {
+            return new WP_Error( 'sml_term_missing', __( 'The source term is unavailable.', 'simple-multilang-blocks' ) );
+        }
+        if ( ! isset( $languages[ $target_language ] ) || SML_Core::get_term_language( $source_term_id ) === $target_language ) {
+            return new WP_Error( 'sml_invalid_language', __( 'Choose a different valid target language.', 'simple-multilang-blocks' ) );
+        }
+        $translations = SML_Core::get_term_translations( $source_term_id );
+        if ( ! empty( $translations[ $target_language ] ) ) {
+            return new WP_Error( 'sml_term_translation_exists', __( 'A translation already exists for this language.', 'simple-multilang-blocks' ), array( 'term_id' => absint( $translations[ $target_language ] ) ) );
+        }
+        return true;
+    }
+
     private static function job_id( $source_post_id, $target_language ) {
         return absint( $source_post_id ) . ':' . sanitize_key( $target_language );
     }
@@ -394,6 +485,27 @@ final class SML_Translation_Service {
                 $mapped[] = ! empty( $term_translations[ $target_language ] ) ? absint( $term_translations[ $target_language ] ) : absint( $term_id );
             }
             wp_set_object_terms( $target_post_id, $mapped, $taxonomy, false );
+        }
+    }
+
+    private static function copy_term_meta( $source_term_id, $target_term_id ) {
+        $meta = get_term_meta( $source_term_id );
+        $ignored = array(
+            '_sml_language',
+            '_sml_translations',
+            '_sml_visible_in',
+            '_sml_translation_status',
+            '_sml_translation_source',
+            '_sml_translation_provider',
+            '_sml_translation_created_at',
+        );
+        foreach ( $meta as $key => $values ) {
+            if ( in_array( $key, $ignored, true ) || 0 === strpos( $key, '_sml_' ) ) {
+                continue;
+            }
+            foreach ( (array) $values as $value ) {
+                add_term_meta( $target_term_id, $key, maybe_unserialize( $value ) );
+            }
         }
     }
 

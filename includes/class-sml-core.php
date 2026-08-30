@@ -63,6 +63,7 @@ final class SML_Core {
         add_action( 'admin_post_sml_save_settings', array( $this, 'save_settings' ) );
         add_action( 'admin_post_sml_preview_wpml', array( $this, 'preview_wpml' ) );
         add_action( 'admin_post_sml_import_wpml', array( $this, 'import_wpml' ) );
+        add_action( 'admin_post_sml_create_term_translation', array( $this, 'create_term_translation' ) );
     }
 
     public static function activate() {
@@ -890,8 +891,41 @@ final class SML_Core {
             <?php foreach ( $languages as $slug => $data ) : ?><option value="<?php echo esc_attr( $slug ); ?>" <?php selected( $current, $slug ); ?>><?php echo esc_html( $data['name'] ); ?></option><?php endforeach; ?>
         </select></label></p><?php
         foreach ( $languages as $slug => $data ) {
-            printf( '<p><label>%s <input min="1" type="number" name="sml_term_translations[%s]" value="%s"></label></p>', esc_html( $data['name'] ), esc_attr( $slug ), esc_attr( isset( $translations[ $slug ] ) ? (int) $translations[ $slug ] : '' ) );
+            printf( '<p><label>%s <input min="1" type="number" name="sml_term_translations[%s]" value="%s"></label>', esc_html( $data['name'] ), esc_attr( $slug ), esc_attr( isset( $translations[ $slug ] ) ? (int) $translations[ $slug ] : '' ) );
+            if ( $term_id && ! empty( $translations[ $slug ] ) ) {
+                $translation_id = absint( $translations[ $slug ] );
+                echo ' <a class="button button-small" href="' . esc_url( get_edit_term_link( $translation_id, get_term_field( 'taxonomy', $term_id ) ) ) . '">' . esc_html__( 'Edit translation', 'simple-multilang-blocks' ) . '</a>';
+                if ( 'needs_review' === get_term_meta( $translation_id, '_sml_translation_status', true ) || 'draft' === get_term_meta( $translation_id, '_sml_translation_status', true ) ) {
+                    echo ' <span class="sml-review-badge">' . esc_html__( 'Requires review', 'simple-multilang-blocks' ) . '</span>';
+                }
+            } elseif ( $term_id && $slug !== $current ) {
+                $taxonomy = get_term_field( 'taxonomy', $term_id );
+                $url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_create_term_translation', 'term' => $term_id, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_create_term_translation_' . $term_id . '_' . $slug );
+                echo ' <a class="button button-small button-secondary" href="' . esc_url( $url ) . '">' . esc_html__( 'Create linked term', 'simple-multilang-blocks' ) . '</a>';
+            }
+            echo '</p>';
         }
+    }
+
+    public function create_term_translation() {
+        $term_id = isset( $_GET['term'] ) ? absint( $_GET['term'] ) : 0;
+        $language = isset( $_GET['lang'] ) ? sanitize_key( wp_unslash( $_GET['lang'] ) ) : '';
+        $term = $term_id ? get_term( $term_id ) : false;
+        $taxonomy = $term && ! is_wp_error( $term ) ? get_taxonomy( $term->taxonomy ) : false;
+        if ( ! $term || is_wp_error( $term ) || ! $taxonomy || ! current_user_can( $taxonomy->cap->manage_terms ) ) {
+            wp_die( esc_html__( 'You are not allowed to create this term translation.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( 'sml_create_term_translation_' . $term_id . '_' . $language );
+        if ( ! isset( self::get_languages()[ $language ] ) ) {
+            wp_die( esc_html__( 'The target language is invalid.', 'simple-multilang-blocks' ) );
+        }
+        $result = SML_Translation_Service::create_manual_term( $term_id, $language );
+        if ( is_wp_error( $result ) ) {
+            wp_safe_redirect( add_query_arg( 'sml_term_error', '1', get_edit_term_link( $term_id, $term->taxonomy ) ) );
+            exit;
+        }
+        wp_safe_redirect( add_query_arg( 'sml_term_created', '1', get_edit_term_link( absint( $result ), $term->taxonomy ) ) );
+        exit;
     }
 
     public function save_term_language( $term_id, $taxonomy ) {
