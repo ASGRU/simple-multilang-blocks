@@ -1,0 +1,26 @@
+name: Release plugin
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build plugin archive
+        run: |
+          mkdir -p dist/simple-multilang-blocks
+          cp simple-multilang-blocks.php readme.txt uninstall.php dist/simple-multilang-blocks/
+          cp -R includes dist/simple-multilang-blocks/
+          cd dist
+          zip -r simple-multilang-blocks.zip simple-multilang-blocks
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/simple-multilang-blocks.zip --generate-notes --verify-tag
