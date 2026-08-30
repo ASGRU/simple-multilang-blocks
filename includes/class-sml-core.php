@@ -488,17 +488,29 @@ final class SML_Core {
         if ( is_singular() ) {
             $post_id = get_queried_object_id();
             $translations = self::get_post_translations( $post_id );
-            foreach ( $translations as $language => $post_id ) {
-                $links[ $language ] = get_permalink( $post_id );
+            if ( $translations ) {
+                foreach ( $translations as $language => $post_id ) {
+                    $links[ $language ] = get_permalink( $post_id );
+                }
+            } else {
+                foreach ( self::get_languages() as $language => $data ) {
+                    $links[ $language ] = self::add_language_to_url( get_permalink( $post_id ), $language );
+                }
             }
         } elseif ( is_tax() || is_category() || is_tag() ) {
             $term = get_queried_object();
             if ( $term && ! is_wp_error( $term ) ) {
                 $translations = self::get_term_translations( $term->term_id );
-                foreach ( $translations as $language => $term_id ) {
-                    $translated = get_term( $term_id, $term->taxonomy );
-                    if ( $translated && ! is_wp_error( $translated ) ) {
-                        $links[ $language ] = get_term_link( $translated );
+                if ( $translations ) {
+                    foreach ( $translations as $language => $term_id ) {
+                        $translated = get_term( $term_id, $term->taxonomy );
+                        if ( $translated && ! is_wp_error( $translated ) ) {
+                            $links[ $language ] = get_term_link( $translated );
+                        }
+                    }
+                } else {
+                    foreach ( self::get_languages() as $language => $data ) {
+                        $links[ $language ] = self::add_language_to_url( get_term_link( $term ), $language );
                     }
                 }
             }

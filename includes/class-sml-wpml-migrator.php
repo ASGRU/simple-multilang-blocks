@@ -31,8 +31,9 @@ final class SML_WPML_Migrator {
             throw new RuntimeException( 'WPML has no active languages to import.' );
         }
 
-        $post_result = self::migrate_posts( $translations_table, array_keys( $languages ), $dry_run );
-        $term_result = self::migrate_terms( $translations_table, array_keys( $languages ), $dry_run );
+        $default_language = self::get_default_language( $languages );
+        $post_result = self::migrate_posts( $translations_table, array_keys( $languages ), $default_language, $dry_run );
+        $term_result = self::migrate_terms( $translations_table, array_keys( $languages ), $default_language, $dry_run );
         $result = array_merge( $result, $post_result, $term_result );
 
         if ( self::table_exists( $strings_table ) && self::table_exists( $string_translations_table ) ) {
@@ -40,6 +41,16 @@ final class SML_WPML_Migrator {
         }
 
         return $result;
+    }
+
+    private static function get_default_language( $languages ) {
+        foreach ( $languages as $slug => $language ) {
+            if ( ! empty( $language['is_default'] ) ) {
+                return $slug;
+            }
+        }
+
+        return (string) key( $languages );
     }
 
     private static function table_exists( $table ) {
@@ -75,7 +86,7 @@ final class SML_WPML_Migrator {
         return $languages;
     }
 
-    private static function migrate_posts( $table, $languages, $dry_run ) {
+    private static function migrate_posts( $table, $languages, $default_language, $dry_run ) {
         global $wpdb;
         $public = get_post_types( array( 'public' => true ), 'names' );
         unset( $public['attachment'] );
@@ -100,10 +111,16 @@ final class SML_WPML_Migrator {
             }
         }
 
-        return array( 'post_groups' => count( $groups ), 'posts' => self::count_grouped_objects( $groups ) );
+        $fallback_posts = $dry_run ? self::count_unmapped_posts( $post_types ) : self::backfill_unmapped_posts( $post_types, $default_language );
+
+        return array(
+            'post_groups'    => count( $groups ),
+            'posts'          => self::count_grouped_objects( $groups ) + $fallback_posts,
+            'fallback_posts' => $fallback_posts,
+        );
     }
 
-    private static function migrate_terms( $table, $languages, $dry_run ) {
+    private static function migrate_terms( $table, $languages, $default_language, $dry_run ) {
         global $wpdb;
         $taxonomies = get_taxonomies( array( 'show_ui' => true ), 'names' );
         if ( ! $taxonomies ) {
@@ -125,7 +142,75 @@ final class SML_WPML_Migrator {
             }
         }
 
-        return array( 'term_groups' => count( $groups ), 'terms' => self::count_grouped_objects( $groups ) );
+        $fallback_terms = $dry_run ? self::count_unmapped_terms( $taxonomies ) : self::backfill_unmapped_terms( $taxonomies, $default_language );
+
+        return array(
+            'term_groups'   => count( $groups ),
+            'terms'         => self::count_grouped_objects( $groups ) + $fallback_terms,
+            'fallback_terms'=> $fallback_terms,
+        );
+    }
+
+    private static function unmapped_post_ids( $post_types ) {
+        return get_posts(
+            array(
+                'post_type'        => $post_types,
+                'post_status'      => array( 'publish', 'private' ),
+                'posts_per_page'   => -1,
+                'fields'           => 'ids',
+                'suppress_filters' => true,
+                'meta_query'       => array(
+                    array(
+                        'key'     => '_sml_language',
+                        'compare' => 'NOT EXISTS',
+                    ),
+                ),
+            )
+        );
+    }
+
+    private static function count_unmapped_posts( $post_types ) {
+        return count( self::unmapped_post_ids( $post_types ) );
+    }
+
+    private static function backfill_unmapped_posts( $post_types, $default_language ) {
+        $ids = self::unmapped_post_ids( $post_types );
+        foreach ( $ids as $post_id ) {
+            SML_Core::sync_post_translations( array( $default_language => (int) $post_id ) );
+        }
+
+        return count( $ids );
+    }
+
+    private static function unmapped_term_ids( $taxonomies ) {
+        $terms = get_terms(
+            array(
+                'taxonomy'   => $taxonomies,
+                'hide_empty' => false,
+                'fields'     => 'ids',
+                'meta_query' => array(
+                    array(
+                        'key'     => '_sml_language',
+                        'compare' => 'NOT EXISTS',
+                    ),
+                ),
+            )
+        );
+
+        return is_wp_error( $terms ) ? array() : array_map( 'absint', $terms );
+    }
+
+    private static function count_unmapped_terms( $taxonomies ) {
+        return count( self::unmapped_term_ids( $taxonomies ) );
+    }
+
+    private static function backfill_unmapped_terms( $taxonomies, $default_language ) {
+        $ids = self::unmapped_term_ids( $taxonomies );
+        foreach ( $ids as $term_id ) {
+            SML_Core::sync_term_translations( array( $default_language => (int) $term_id ) );
+        }
+
+        return count( $ids );
     }
 
     private static function group_rows( $rows, $languages ) {
