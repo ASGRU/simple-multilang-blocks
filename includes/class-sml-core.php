@@ -669,17 +669,10 @@ final class SML_Core {
             $term = get_queried_object();
             if ( $term && ! is_wp_error( $term ) ) {
                 $translations = self::get_term_translations( $term->term_id );
-                if ( $translations ) {
-                    foreach ( $translations as $language => $term_id ) {
-                        $translated = get_term( $term_id, $term->taxonomy );
-                        if ( $translated && ! is_wp_error( $translated ) ) {
-                            $links[ $language ] = get_term_link( $translated );
-                        }
-                    }
-                } else {
-                    foreach ( self::get_languages() as $language => $data ) {
-                        $links[ $language ] = self::add_language_to_url( get_term_link( $term ), $language );
-                    }
+                foreach ( self::get_languages() as $language => $data ) {
+                    $translated_term_id = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+                    $translated = $translated_term_id ? get_term( $translated_term_id, $term->taxonomy ) : false;
+                    $links[ $language ] = $translated && ! is_wp_error( $translated ) ? get_term_link( $translated ) : self::add_language_to_url( get_term_link( $term ), $language );
                 }
             }
         } else {
