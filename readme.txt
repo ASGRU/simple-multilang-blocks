@@ -14,7 +14,7 @@ A lightweight multilingual layer for block-based WordPress sites.
 * Post, page, WooCommerce product and taxonomy translation relationships.
 * Language-prefixed URLs, a styled automatic/shortcode language switcher and hreflang tags.
 * WPML migration for content relationships and String Translation entries.
-* Theme POT-catalogue screen for editing active-theme strings in WordPress admin.
+* Public-interface string screen for the active theme and selected plugins.
 * Manual draft creation and editor-triggered DeepL/OpenAI translations, always marked for review.
 * WordPress update notifications from signed GitHub Release assets.
 
@@ -42,9 +42,13 @@ Optional: `define( 'SML_OPENAI_MODEL', 'gpt-5-mini' );`
 
 The plugin never sends content to a provider until an editor presses **Auto-translate**. Successful results are linked drafts with a **Requires review** marker; they are never published automatically. If a provider is unavailable, no draft is created and no frontend error is shown.
 
-== Theme strings ==
+== Interface strings ==
 
-Open **Settings → Theme strings** to edit all strings catalogued from the active theme POT file. The plugin applies these values through the standard gettext filters; it does not modify theme source, PO or MO files.
+Open **Settings → Interface strings** to edit strings from the active theme and selected active plugins. POT catalogues are scanned where available; otherwise a selected plugin's visible public strings are captured using the text WordPress already displays. The plugin applies these values only to the public interface through standard gettext filters; it does not modify theme/plugin source, PO or MO files.
+
+== Language switcher ==
+
+The switcher can be automatic or shortcode-only. Its appearance is stored per active theme: theme colours, light, dark or minimal. Add a theme-specific CSS class when a project needs its own styling layer.
 
 == License ==
 

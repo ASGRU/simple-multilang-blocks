@@ -28,9 +28,15 @@ Simple Multilang Blocks is free software, released under the GNU General Public 
 4. Verify pages, WooCommerce product/category archives, navigation and translated interface strings.
 5. Deactivate WPML only after verification. The importer never deletes WPML data.
 
-## Editing theme strings
+## Editing interface strings
 
-The active theme's `languages/*.pot` file is catalogued on activation and can be rescanned under **Settings → Theme strings**. The translations are stored by Simple Multilang and applied through WordPress gettext filters, so the theme files and its shipped `.po` / `.mo` files remain untouched.
+The active theme's `languages/*.pot` file is catalogued on activation and can be rescanned under **Settings → Interface strings**. Select only the active plugins whose public labels should be translated; their POT files are scanned too. If a selected plugin has no POT file, its visible public strings are catalogued from the text already rendered by WordPress.
+
+Translations are applied only to the public site interface by default. The WordPress admin, service actions, content translations, routes and language relationships are not altered. The theme/plugin source and shipped `.po` / `.mo` files remain untouched.
+
+## Language switcher appearance
+
+Switcher placement and appearance are stored per active theme. **Use theme colors** inherits `theme.json` colour presets when available; light, dark and minimal variants are also available. A theme-specific CSS class can be supplied for a project's own style layer.
 
 ## Automatic translations
 
