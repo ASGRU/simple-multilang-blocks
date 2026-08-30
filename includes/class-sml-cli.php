@@ -40,7 +40,7 @@ final class SML_CLI_Command {
             WP_CLI::success( 'Dry run complete. Run again with --yes after taking a database backup.' );
             return;
         }
-        flush_rewrite_rules();
+        SML_Core::schedule_rewrite_flush();
         WP_CLI::success( 'WPML data imported and rewrite rules refreshed.' );
     }
 }

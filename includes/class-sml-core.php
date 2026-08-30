@@ -6,6 +6,7 @@ final class SML_Core {
     const OPTION_LANGUAGES  = 'sml_languages';
     const OPTION_POST_TYPES = 'sml_post_types';
     const OPTION_TAXONOMIES = 'sml_taxonomies';
+    const OPTION_REWRITE_FLUSH = 'sml_flush_rewrite_rules';
 
     private static $instance;
     private static $request_language = null;
@@ -21,6 +22,7 @@ final class SML_Core {
 
     private function __construct() {
         add_action( 'init', array( $this, 'register_rewrite_rules' ), 1 );
+        add_action( 'init', array( $this, 'maybe_flush_rewrite_rules' ), 99 );
         add_filter( 'query_vars', array( $this, 'register_query_vars' ) );
         add_action( 'parse_request', array( $this, 'route_language_request' ) );
         add_action( 'pre_get_posts', array( $this, 'filter_main_query_language' ), 20 );
@@ -31,6 +33,7 @@ final class SML_Core {
         add_filter( 'term_link', array( $this, 'filter_term_link' ), 20, 3 );
         add_filter( 'language_attributes', array( $this, 'filter_language_attributes' ), 20, 2 );
         add_action( 'wp_head', array( $this, 'output_hreflang' ), 1 );
+        add_action( 'template_redirect', array( $this, 'redirect_noncanonical_language_url' ), 1 );
         add_shortcode( 'sml_language_switcher', array( $this, 'language_switcher_shortcode' ) );
 
         add_action( 'add_meta_boxes', array( $this, 'register_post_meta_boxes' ) );
@@ -63,6 +66,10 @@ final class SML_Core {
 
     public static function deactivate() {
         flush_rewrite_rules();
+    }
+
+    public static function schedule_rewrite_flush() {
+        update_option( self::OPTION_REWRITE_FLUSH, 1, false );
     }
 
     public static function default_languages() {
@@ -198,6 +205,14 @@ final class SML_Core {
         $pattern = implode( '|', array_map( 'preg_quote', $slugs ) );
         add_rewrite_rule( '^(' . $pattern . ')/?$', 'index.php?sml_language=$matches[1]&sml_home=1', 'top' );
         add_rewrite_rule( '^(' . $pattern . ')/(.*)/?$', 'index.php?sml_language=$matches[1]&sml_path=$matches[2]', 'top' );
+    }
+
+    public function maybe_flush_rewrite_rules() {
+        if ( ! get_option( self::OPTION_REWRITE_FLUSH ) ) {
+            return;
+        }
+        delete_option( self::OPTION_REWRITE_FLUSH );
+        flush_rewrite_rules( false );
     }
 
     public function route_language_request( $wp ) {
@@ -389,6 +404,23 @@ final class SML_Core {
         $code = $languages[ $language ]['code'];
         $direction = preg_match( '/^(ar|fa|he|ur)(-|$)/i', $code ) ? 'rtl' : 'ltr';
         return sprintf( 'lang="%s" dir="%s"', esc_attr( $code ), esc_attr( $direction ) );
+    }
+
+    public function redirect_noncanonical_language_url() {
+        if ( is_admin() || wp_doing_ajax() || ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) || ! is_singular() ) {
+            return;
+        }
+        $post_id = get_queried_object_id();
+        $post = $post_id ? get_post( $post_id ) : false;
+        if ( ! $post || ! in_array( $post->post_type, self::get_post_types(), true ) ) {
+            return;
+        }
+        $language = self::get_post_language( $post_id );
+        if ( $language === self::get_default_language() || get_query_var( 'sml_language' ) || isset( $_GET['lang'] ) ) {
+            return;
+        }
+        wp_safe_redirect( get_permalink( $post_id ), 301 );
+        exit;
     }
 
     public function output_hreflang() {
@@ -673,7 +705,7 @@ final class SML_Core {
         $taxonomies = array_values( array_intersect( array_map( 'sanitize_key', (array) ( $_POST['sml_taxonomies'] ?? array() ) ), $available_taxonomies ) );
         update_option( self::OPTION_POST_TYPES, $post_types );
         update_option( self::OPTION_TAXONOMIES, $taxonomies );
-        flush_rewrite_rules();
+        self::schedule_rewrite_flush();
         wp_safe_redirect( add_query_arg( 'updated', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
         exit;
     }
@@ -687,7 +719,7 @@ final class SML_Core {
             wp_die( esc_html__( 'Confirm the import after taking a database backup.', 'simple-multilang-blocks' ) );
         }
         SML_WPML_Migrator::run( false );
-        flush_rewrite_rules();
+        self::schedule_rewrite_flush();
         wp_safe_redirect( add_query_arg( 'imported', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
         exit;
     }
