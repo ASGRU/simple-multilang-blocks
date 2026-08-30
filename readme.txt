@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.1.1
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -28,6 +28,6 @@ The token is never stored in the database or displayed in WordPress.
 
 == Migrating from WPML ==
 
-Take a database backup. In the plugin settings use **Import WPML data**, or run `wp sml migrate-wpml --dry-run` followed by `wp sml migrate-wpml --yes`.
+Take a database backup. In the plugin settings use **Import WPML data**, or run `wp sml migrate_wpml --dry-run` followed by `wp sml migrate_wpml --yes`.
 
 The importer does not delete WPML tables, settings or plugin files. Verify representative pages, product categories and translated interface strings before removing WPML from disk.

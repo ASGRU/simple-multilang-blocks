@@ -16,7 +16,7 @@ Push a semantic-version tag such as `v1.1.1`. The included GitHub Actions workfl
 ## WPML migration
 
 1. Back up the database.
-2. Run `wp sml migrate-wpml --dry-run`.
-3. Run `wp sml migrate-wpml --yes`.
+2. Run `wp sml migrate_wpml --dry-run`.
+3. Run `wp sml migrate_wpml --yes`.
 4. Verify pages, WooCommerce product/category archives, navigation and translated interface strings.
 5. Deactivate WPML only after verification. The importer never deletes WPML data.

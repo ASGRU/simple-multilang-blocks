@@ -16,8 +16,8 @@ final class SML_CLI_Command {
      *
      * ## EXAMPLES
      *
-     *     wp sml migrate-wpml --dry-run
-     *     wp sml migrate-wpml --yes
+     *     wp sml migrate_wpml --dry-run
+     *     wp sml migrate_wpml --yes
      */
     public function migrate_wpml( $args, $assoc_args ) {
         $dry_run = empty( $assoc_args['yes'] );
