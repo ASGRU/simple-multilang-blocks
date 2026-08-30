@@ -7,6 +7,9 @@ final class SML_Core {
     const OPTION_POST_TYPES = 'sml_post_types';
     const OPTION_TAXONOMIES = 'sml_taxonomies';
     const OPTION_REWRITE_FLUSH = 'sml_flush_rewrite_rules';
+    const OPTION_SWITCHER_PLACEMENT = 'sml_switcher_placement';
+    const OPTION_DB_VERSION = 'sml_db_version';
+    const DB_VERSION = '1.3.0';
 
     private static $instance;
     private static $request_language = null;
@@ -22,6 +25,7 @@ final class SML_Core {
 
     private function __construct() {
         add_action( 'init', array( $this, 'register_rewrite_rules' ), 1 );
+        add_action( 'admin_init', array( $this, 'maybe_upgrade_database' ) );
         add_action( 'init', array( $this, 'maybe_flush_rewrite_rules' ), 99 );
         add_filter( 'query_vars', array( $this, 'register_query_vars' ) );
         add_action( 'parse_request', array( $this, 'route_language_request' ) );
@@ -36,6 +40,14 @@ final class SML_Core {
         add_filter( 'redirect_canonical', array( $this, 'prevent_language_canonical_redirect' ), 10, 2 );
         add_action( 'template_redirect', array( $this, 'redirect_noncanonical_language_url' ), 1 );
         add_shortcode( 'sml_language_switcher', array( $this, 'language_switcher_shortcode' ) );
+        add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_assets' ) );
+        add_action( 'wp_body_open', array( $this, 'render_automatic_switcher' ), 20 );
+        add_action( 'wp_footer', array( $this, 'render_automatic_switcher_fallback' ), 1 );
+
+        if ( ! defined( 'ICL_SITEPRESS_VERSION' ) && ! class_exists( 'SitePress' ) ) {
+            add_filter( 'wpml_current_language', array( $this, 'compat_current_language' ) );
+            add_filter( 'wpml_object_id', array( $this, 'compat_object_id' ), 10, 5 );
+        }
 
         add_action( 'add_meta_boxes', array( $this, 'register_post_meta_boxes' ) );
         add_action( 'save_post', array( $this, 'save_post_language' ), 20, 2 );
@@ -48,6 +60,7 @@ final class SML_Core {
 
     public static function activate() {
         self::create_string_tables();
+        update_option( self::OPTION_DB_VERSION, self::DB_VERSION );
 
         if ( ! get_option( self::OPTION_LANGUAGES ) ) {
             update_option( self::OPTION_LANGUAGES, self::default_languages() );
@@ -62,11 +75,22 @@ final class SML_Core {
         }
 
         self::instance()->register_rewrite_rules();
+        if ( class_exists( 'SML_Theme_Strings' ) ) {
+            SML_Theme_Strings::scan_active_theme();
+        }
         flush_rewrite_rules();
     }
 
     public static function deactivate() {
         flush_rewrite_rules();
+    }
+
+    public function maybe_upgrade_database() {
+        if ( self::DB_VERSION === get_option( self::OPTION_DB_VERSION ) ) {
+            return;
+        }
+        self::create_string_tables();
+        update_option( self::OPTION_DB_VERSION, self::DB_VERSION );
     }
 
     public static function schedule_rewrite_flush() {
@@ -75,9 +99,9 @@ final class SML_Core {
 
     public static function default_languages() {
         return array(
-            'en' => array( 'slug' => 'en', 'code' => 'en-US', 'name' => 'English', 'is_default' => true ),
-            'et' => array( 'slug' => 'et', 'code' => 'et-EE', 'name' => 'Eesti', 'is_default' => false ),
-            'ru' => array( 'slug' => 'ru', 'code' => 'ru-RU', 'name' => 'Русский', 'is_default' => false ),
+            'en' => array( 'slug' => 'en', 'code' => 'en-US', 'name' => 'English', 'flag' => '🇬🇧', 'is_default' => true ),
+            'et' => array( 'slug' => 'et', 'code' => 'et-EE', 'name' => 'Eesti', 'flag' => '🇪🇪', 'is_default' => false ),
+            'ru' => array( 'slug' => 'ru', 'code' => 'ru-RU', 'name' => 'Русский', 'flag' => '🇷🇺', 'is_default' => false ),
         );
     }
 
@@ -102,11 +126,32 @@ final class SML_Core {
                 'slug'       => $slug,
                 'code'       => isset( $language['code'] ) ? sanitize_text_field( $language['code'] ) : $slug,
                 'name'       => isset( $language['name'] ) ? sanitize_text_field( $language['name'] ) : strtoupper( $slug ),
+                'flag'       => isset( $language['flag'] ) ? sanitize_text_field( $language['flag'] ) : self::get_language_flag( $slug ),
                 'is_default' => ! empty( $language['is_default'] ),
             );
         }
 
         return $normalized ? $normalized : self::default_languages();
+    }
+
+    public static function get_language_flag( $language ) {
+        if ( is_array( $language ) ) {
+            if ( ! empty( $language['flag'] ) ) {
+                return (string) $language['flag'];
+            }
+            $language = $language['slug'] ?? '';
+        }
+        $slug = sanitize_key( $language );
+        $fallbacks = array( 'en' => '🇬🇧', 'et' => '🇪🇪', 'ru' => '🇷🇺', 'de' => '🇩🇪', 'fi' => '🇫🇮', 'lv' => '🇱🇻', 'lt' => '🇱🇹', 'sv' => '🇸🇪' );
+        return $fallbacks[ $slug ] ?? strtoupper( $slug );
+    }
+
+    public static function get_language_flag_html( $language ) {
+        $flag = self::get_language_flag( $language );
+        if ( wp_http_validate_url( $flag ) ) {
+            return '<img class="sml-language-flag-image" src="' . esc_url( $flag ) . '" alt="">';
+        }
+        return esc_html( $flag );
     }
 
     public static function get_default_language() {
@@ -505,7 +550,7 @@ final class SML_Core {
     }
 
     public function language_switcher_shortcode( $atts ) {
-        $atts = shortcode_atts( array( 'class' => '' ), $atts, 'sml_language_switcher' );
+        $atts = shortcode_atts( array( 'class' => '', 'style' => 'dropdown', 'show_name' => '1' ), $atts, 'sml_language_switcher' );
         $translations = array();
         $current = self::get_current_language();
         $links = array();
@@ -549,16 +594,57 @@ final class SML_Core {
             return '';
         }
 
-        $class = trim( 'sml-language-switcher ' . sanitize_html_class( $atts['class'] ) );
+        $style = in_array( $atts['style'], array( 'dropdown', 'pills', 'list' ), true ) ? $atts['style'] : 'dropdown';
+        $class = trim( 'sml-language-switcher sml-language-switcher--' . $style . ' ' . sanitize_html_class( $atts['class'] ) );
         $html = '<nav class="' . esc_attr( $class ) . '" aria-label="' . esc_attr__( 'Language selector', 'simple-multilang-blocks' ) . '"><ul>';
         foreach ( self::get_languages() as $language => $data ) {
             if ( empty( $links[ $language ] ) ) {
                 continue;
             }
             $active = $language === $current ? ' class="is-active"' : '';
-            $html .= sprintf( '<li%s><a href="%s" hreflang="%s" lang="%s">%s</a></li>', $active, esc_url( $links[ $language ] ), esc_attr( $data['code'] ), esc_attr( $data['code'] ), esc_html( $data['name'] ) );
+            $label = '<span class="sml-language-switcher__flag" aria-hidden="true">' . self::get_language_flag_html( $data ) . '</span>';
+            if ( '0' !== (string) $atts['show_name'] ) {
+                $label .= '<span class="sml-language-switcher__name">' . esc_html( $data['name'] ) . '</span>';
+            }
+            $html .= sprintf( '<li%s><a href="%s" hreflang="%s" lang="%s" aria-current="%s">%s</a></li>', $active, esc_url( $links[ $language ] ), esc_attr( $data['code'] ), esc_attr( $data['code'] ), $language === $current ? 'true' : 'false', $label );
         }
         return $html . '</ul></nav>';
+    }
+
+    public function enqueue_frontend_assets() {
+        wp_enqueue_style( 'simple-multilang-blocks', plugins_url( 'assets/css/sml-frontend.css', SML_FILE ), array(), SML_VERSION );
+    }
+
+    public function render_automatic_switcher() {
+        if ( 'automatic' !== get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) || is_admin() ) {
+            return;
+        }
+        echo '<div class="sml-switcher-slot">' . do_shortcode( '[sml_language_switcher style="dropdown"]' ) . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    }
+
+    public function render_automatic_switcher_fallback() {
+        if ( 'automatic' !== get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) || did_action( 'wp_body_open' ) || is_admin() ) {
+            return;
+        }
+        echo '<div class="sml-switcher-slot">' . do_shortcode( '[sml_language_switcher style="dropdown"]' ) . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    }
+
+    public function compat_current_language( $value = null ) {
+        return self::get_current_language();
+    }
+
+    public function compat_object_id( $object_id, $object_type = '', $return_original_if_missing = true, $language_code = null ) {
+        $object_id = absint( $object_id );
+        $target = $language_code ? sanitize_key( $language_code ) : self::get_current_language();
+        if ( ! $object_id || ! isset( self::get_languages()[ $target ] ) ) {
+            return $return_original_if_missing ? $object_id : null;
+        }
+        $term_types = array_merge( array( 'nav_menu' ), self::get_taxonomies() );
+        $translations = in_array( $object_type, $term_types, true ) ? self::get_term_translations( $object_id ) : self::get_post_translations( $object_id );
+        if ( ! empty( $translations[ $target ] ) ) {
+            return absint( $translations[ $target ] );
+        }
+        return $return_original_if_missing ? $object_id : null;
     }
 
     public function register_post_meta_boxes() {
@@ -579,10 +665,21 @@ final class SML_Core {
                 <option value="<?php echo esc_attr( $slug ); ?>" <?php selected( $current, $slug ); ?>><?php echo esc_html( $data['name'] ); ?></option>
             <?php endforeach; ?>
         </select></p>
-        <p class="description"><?php esc_html_e( 'Enter the ID of the matching post in each language. IDs must have the same post type and be editable by you.', 'simple-multilang-blocks' ); ?></p>
+        <p class="description"><?php esc_html_e( 'Create a linked draft for a language, then edit and publish it only after verification. Machine translations are always created as drafts marked “Requires review”.', 'simple-multilang-blocks' ); ?></p>
         <?php foreach ( $languages as $slug => $data ) : ?>
-            <p><label><?php echo esc_html( $data['name'] ); ?><input class="widefat" min="1" type="number" name="sml_translations[<?php echo esc_attr( $slug ); ?>]" value="<?php echo esc_attr( isset( $translations[ $slug ] ) ? (int) $translations[ $slug ] : '' ); ?>"></label></p>
+            <p class="sml-editor-translation-row"><strong><?php echo esc_html( self::get_language_flag( $data ) . ' ' . $data['name'] ); ?></strong><br>
+            <?php if ( ! empty( $translations[ $slug ] ) ) : $translation_id = absint( $translations[ $slug ] ); ?>
+                <a class="button button-small" href="<?php echo esc_url( get_edit_post_link( $translation_id, '' ) ); ?>"><?php esc_html_e( 'Edit translation', 'simple-multilang-blocks' ); ?></a>
+                <?php if ( 'needs_review' === get_post_meta( $translation_id, '_sml_translation_status', true ) ) : ?><span class="sml-review-badge"><?php esc_html_e( 'Requires review', 'simple-multilang-blocks' ); ?></span><?php endif; ?>
+            <?php elseif ( $slug !== $current ) :
+                $manual_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_create_translation', 'post' => $post->ID, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_create_translation_' . $post->ID . '_' . $slug );
+                $machine_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_translate_post', 'post' => $post->ID, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_translate_post_' . $post->ID . '_' . $slug );
+            ?>
+                <a class="button button-small" href="<?php echo esc_url( $manual_url ); ?>"><?php esc_html_e( 'Create draft', 'simple-multilang-blocks' ); ?></a>
+                <a class="button button-small button-secondary" href="<?php echo esc_url( $machine_url ); ?>"><?php esc_html_e( 'Auto-translate', 'simple-multilang-blocks' ); ?></a>
+            <?php endif; ?></p>
         <?php endforeach; ?>
+        <details><summary><?php esc_html_e( 'Link an existing translation by ID', 'simple-multilang-blocks' ); ?></summary><p class="description"><?php esc_html_e( 'Use this only when the translation already exists. IDs must have the same content type.', 'simple-multilang-blocks' ); ?></p><?php foreach ( $languages as $slug => $data ) : ?><p><label><?php echo esc_html( $data['name'] ); ?><input class="widefat" min="1" type="number" name="sml_translations[<?php echo esc_attr( $slug ); ?>]" value="<?php echo esc_attr( isset( $translations[ $slug ] ) ? (int) $translations[ $slug ] : '' ); ?>"></label></p><?php endforeach; ?></details>
         <?php
     }
 
@@ -745,20 +842,39 @@ final class SML_Core {
         if ( ! current_user_can( 'manage_options' ) ) {
             return;
         }
-        $languages = wp_json_encode( array_values( self::get_languages() ), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE );
+        $languages = array_values( self::get_languages() );
         $post_types = get_post_types( array( 'show_ui' => true ), 'objects' );
         $taxonomies = get_taxonomies( array( 'show_ui' => true ), 'objects' );
+        $presets = self::language_presets();
         ?>
-        <div class="wrap"><h1><?php esc_html_e( 'Simple Multilang', 'simple-multilang-blocks' ); ?></h1>
+        <div class="wrap sml-admin-wrap"><h1><?php esc_html_e( 'Simple Multilang settings', 'simple-multilang-blocks' ); ?></h1>
         <?php if ( isset( $_GET['updated'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Settings saved. Rewrite rules were refreshed.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
         <?php if ( isset( $_GET['imported'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'WPML data was imported. Verify representative pages, categories and strings before uninstalling WPML files.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
+        <p><a class="button" href="<?php echo esc_url( admin_url( 'options-general.php?page=sml-theme-strings' ) ); ?>"><?php esc_html_e( 'Translate theme strings', 'simple-multilang-blocks' ); ?></a></p>
         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_save_settings' ); ?><input type="hidden" name="action" value="sml_save_settings">
-        <h2><?php esc_html_e( 'Languages', 'simple-multilang-blocks' ); ?></h2><p><?php esc_html_e( 'One item must have "is_default": true. Default-language URLs stay at the site root.', 'simple-multilang-blocks' ); ?></p>
-        <textarea class="large-text code" rows="12" name="sml_languages_json"><?php echo esc_textarea( $languages ); ?></textarea>
-        <h2><?php esc_html_e( 'Translatable post types', 'simple-multilang-blocks' ); ?></h2>
-        <?php foreach ( $post_types as $name => $object ) : if ( 'attachment' === $name ) { continue; } ?><label style="display:block"><input type="checkbox" name="sml_post_types[]" value="<?php echo esc_attr( $name ); ?>" <?php checked( in_array( $name, self::get_post_types(), true ) ); ?>> <?php echo esc_html( $object->labels->name ); ?></label><?php endforeach; ?>
-        <h2><?php esc_html_e( 'Translatable taxonomies', 'simple-multilang-blocks' ); ?></h2>
-        <?php foreach ( $taxonomies as $name => $object ) : ?><label style="display:block"><input type="checkbox" name="sml_taxonomies[]" value="<?php echo esc_attr( $name ); ?>" <?php checked( in_array( $name, self::get_taxonomies(), true ) ); ?>> <?php echo esc_html( $object->labels->name ); ?></label><?php endforeach; ?>
+        <h2><?php esc_html_e( 'Languages', 'simple-multilang-blocks' ); ?></h2><p class="description"><?php esc_html_e( 'Default-language URLs stay at the site root. Flags can be emoji or a URL to an image.', 'simple-multilang-blocks' ); ?></p>
+        <table class="widefat striped sml-language-settings-table"><thead><tr><th><?php esc_html_e( 'Slug', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Language code', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Name', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Flag', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Default', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Preset', 'simple-multilang-blocks' ); ?></th><th class="sml-remove-heading"><span class="screen-reader-text"><?php esc_html_e( 'Delete', 'simple-multilang-blocks' ); ?></span></th></tr></thead><tbody id="sml-language-rows">
+        <?php foreach ( $languages as $index => $language ) : ?>
+            <tr>
+                <td><input type="text" name="sml_languages[<?php echo esc_attr( $index ); ?>][slug]" value="<?php echo esc_attr( $language['slug'] ); ?>"></td>
+                <td><input type="text" name="sml_languages[<?php echo esc_attr( $index ); ?>][code]" value="<?php echo esc_attr( $language['code'] ); ?>"></td>
+                <td><input type="text" name="sml_languages[<?php echo esc_attr( $index ); ?>][name]" value="<?php echo esc_attr( $language['name'] ); ?>"></td>
+                <td><input type="text" name="sml_languages[<?php echo esc_attr( $index ); ?>][flag]" value="<?php echo esc_attr( self::get_language_flag( $language ) ); ?>"></td>
+                <td class="sml-default-cell"><input type="radio" name="sml_default_language" value="<?php echo esc_attr( $index ); ?>" <?php checked( ! empty( $language['is_default'] ) ); ?>></td>
+                <td><select class="sml-language-preset"><option value=""><?php esc_html_e( '— Choose —', 'simple-multilang-blocks' ); ?></option><?php foreach ( $presets as $preset ) : ?><option value="<?php echo esc_attr( wp_json_encode( $preset ) ); ?>"><?php echo esc_html( $preset['flag'] . ' ' . $preset['name'] . ' (' . $preset['code'] . ')' ); ?></option><?php endforeach; ?></select></td>
+                <td><button type="button" class="button-link-delete sml-remove-language" aria-label="<?php esc_attr_e( 'Delete language', 'simple-multilang-blocks' ); ?>">×</button></td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody></table>
+        <p><button type="button" class="button" id="sml-add-language"><?php esc_html_e( 'Add language', 'simple-multilang-blocks' ); ?></button></p>
+        <template id="sml-language-row-template"><tr><td><input type="text" data-field="slug"></td><td><input type="text" data-field="code"></td><td><input type="text" data-field="name"></td><td><input type="text" data-field="flag"></td><td class="sml-default-cell"><input type="radio" data-field="default"></td><td><select class="sml-language-preset"><option value=""><?php esc_html_e( '— Choose —', 'simple-multilang-blocks' ); ?></option><?php foreach ( $presets as $preset ) : ?><option value="<?php echo esc_attr( wp_json_encode( $preset ) ); ?>"><?php echo esc_html( $preset['flag'] . ' ' . $preset['name'] . ' (' . $preset['code'] . ')' ); ?></option><?php endforeach; ?></select></td><td><button type="button" class="button-link-delete sml-remove-language" aria-label="<?php esc_attr_e( 'Delete language', 'simple-multilang-blocks' ); ?>">×</button></td></tr></template>
+        <h2><?php esc_html_e( 'Translatable content', 'simple-multilang-blocks' ); ?></h2><div class="sml-checkbox-grid">
+        <?php foreach ( $post_types as $name => $object ) : if ( 'attachment' === $name ) { continue; } ?><label><input type="checkbox" name="sml_post_types[]" value="<?php echo esc_attr( $name ); ?>" <?php checked( in_array( $name, self::get_post_types(), true ) ); ?>> <?php echo esc_html( $object->labels->name ); ?></label><?php endforeach; ?>
+        </div><h3><?php esc_html_e( 'Translatable taxonomies', 'simple-multilang-blocks' ); ?></h3><div class="sml-checkbox-grid">
+        <?php foreach ( $taxonomies as $name => $object ) : ?><label><input type="checkbox" name="sml_taxonomies[]" value="<?php echo esc_attr( $name ); ?>" <?php checked( in_array( $name, self::get_taxonomies(), true ) ); ?>> <?php echo esc_html( $object->labels->name ); ?></label><?php endforeach; ?>
+        </div>
+        <h2><?php esc_html_e( 'Language switcher', 'simple-multilang-blocks' ); ?></h2><p><label><input type="radio" name="sml_switcher_placement" value="automatic" <?php checked( 'automatic', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Show a floating switcher automatically', 'simple-multilang-blocks' ); ?></label><br><label><input type="radio" name="sml_switcher_placement" value="shortcode" <?php checked( 'shortcode', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Use shortcode only', 'simple-multilang-blocks' ); ?></label></p><p class="description"><code>[sml_language_switcher style="dropdown"]</code> <?php esc_html_e( 'can be placed in any block, menu template or widget.', 'simple-multilang-blocks' ); ?></p>
+        <h2><?php esc_html_e( 'Automatic translation', 'simple-multilang-blocks' ); ?></h2><p><label><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?> <select name="sml_translation_provider"><option value="" <?php selected( '', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'Disabled', 'simple-multilang-blocks' ); ?></option><option value="deepl" <?php selected( 'deepl', SML_Translation_Service::provider() ); ?>>DeepL</option><option value="openai" <?php selected( 'openai', SML_Translation_Service::provider() ); ?>>OpenAI</option></select></label></p><p><label><?php esc_html_e( 'OpenAI model', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_openai_model" value="<?php echo esc_attr( get_option( SML_Translation_Service::OPTION_OPENAI_MODEL, 'gpt-5-mini' ) ); ?>"></label></p><p><label><?php esc_html_e( 'DeepL endpoint', 'simple-multilang-blocks' ); ?> <select name="sml_deepl_endpoint"><option value="free" <?php selected( 'free', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api-free.deepl.com</option><option value="pro" <?php selected( 'pro', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api.deepl.com</option></select></label></p><div class="notice notice-info inline"><p><?php esc_html_e( 'API keys are never stored in WordPress. Add either SML_DEEPL_API_KEY or SML_OPENAI_API_KEY to wp-config.php. Generated content is always a draft marked “Requires review”; if the service is unavailable, no draft is created and no public-page error is shown.', 'simple-multilang-blocks' ); ?></p></div>
         <p><button class="button button-primary"><?php esc_html_e( 'Save settings', 'simple-multilang-blocks' ); ?></button></p></form>
         <hr><h2><?php esc_html_e( 'WPML migration', 'simple-multilang-blocks' ); ?></h2><p><?php esc_html_e( 'Imports active languages, selected posts, selected taxonomies and String Translation values. It never deletes WPML tables or options.', 'simple-multilang-blocks' ); ?></p>
         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_import_wpml' ); ?><input type="hidden" name="action" value="sml_import_wpml"><label><input required type="checkbox" name="sml_import_confirm" value="1"> <?php esc_html_e( 'I have a database backup and want to import now.', 'simple-multilang-blocks' ); ?></label><p><button class="button"> <?php esc_html_e( 'Import WPML data', 'simple-multilang-blocks' ); ?></button></p></form></div>
@@ -770,11 +886,20 @@ final class SML_Core {
             wp_die( esc_html__( 'You are not allowed to change these settings.', 'simple-multilang-blocks' ) );
         }
         check_admin_referer( 'sml_save_settings' );
-        $raw = isset( $_POST['sml_languages_json'] ) ? wp_unslash( $_POST['sml_languages_json'] ) : '';
-        $languages = json_decode( $raw, true );
+        $languages = isset( $_POST['sml_languages'] ) && is_array( $_POST['sml_languages'] ) ? wp_unslash( $_POST['sml_languages'] ) : array();
+        if ( ! $languages && isset( $_POST['sml_languages_json'] ) ) {
+            $languages = json_decode( wp_unslash( $_POST['sml_languages_json'] ), true );
+        }
+        $default_index = isset( $_POST['sml_default_language'] ) ? absint( $_POST['sml_default_language'] ) : -1;
+        foreach ( $languages as $index => &$language ) {
+            if ( is_array( $language ) ) {
+                $language['is_default'] = (int) $index === $default_index;
+            }
+        }
+        unset( $language );
         $languages = self::sanitize_languages( $languages );
         if ( ! $languages ) {
-            wp_die( esc_html__( 'Enter a valid JSON language list with at least one language.', 'simple-multilang-blocks' ) );
+            wp_die( esc_html__( 'Add at least one valid language.', 'simple-multilang-blocks' ) );
         }
         update_option( self::OPTION_LANGUAGES, $languages );
         $available_post_types = get_post_types( array( 'show_ui' => true ), 'names' );
@@ -783,6 +908,10 @@ final class SML_Core {
         $taxonomies = array_values( array_intersect( array_map( 'sanitize_key', (array) ( $_POST['sml_taxonomies'] ?? array() ) ), $available_taxonomies ) );
         update_option( self::OPTION_POST_TYPES, $post_types );
         update_option( self::OPTION_TAXONOMIES, $taxonomies );
+        update_option( self::OPTION_SWITCHER_PLACEMENT, isset( $_POST['sml_switcher_placement'] ) && 'shortcode' === sanitize_key( wp_unslash( $_POST['sml_switcher_placement'] ) ) ? 'shortcode' : 'automatic' );
+        update_option( SML_Translation_Service::OPTION_PROVIDER, isset( $_POST['sml_translation_provider'] ) && in_array( sanitize_key( wp_unslash( $_POST['sml_translation_provider'] ) ), array( 'deepl', 'openai' ), true ) ? sanitize_key( wp_unslash( $_POST['sml_translation_provider'] ) ) : '' );
+        update_option( SML_Translation_Service::OPTION_OPENAI_MODEL, isset( $_POST['sml_openai_model'] ) ? sanitize_text_field( wp_unslash( $_POST['sml_openai_model'] ) ) : 'gpt-5-mini' );
+        update_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, isset( $_POST['sml_deepl_endpoint'] ) && 'pro' === sanitize_key( wp_unslash( $_POST['sml_deepl_endpoint'] ) ) ? 'pro' : 'free' );
         self::schedule_rewrite_flush();
         wp_safe_redirect( add_query_arg( 'updated', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
         exit;
@@ -822,6 +951,7 @@ final class SML_Core {
                 'slug'       => $slug,
                 'code'       => isset( $language['code'] ) ? sanitize_text_field( $language['code'] ) : $slug,
                 'name'       => isset( $language['name'] ) ? sanitize_text_field( $language['name'] ) : strtoupper( $slug ),
+                'flag'       => isset( $language['flag'] ) ? sanitize_text_field( $language['flag'] ) : self::get_language_flag( $slug ),
                 'is_default' => $is_default,
             );
         }
@@ -832,6 +962,19 @@ final class SML_Core {
         return $result;
     }
 
+    private static function language_presets() {
+        return array(
+            array( 'slug' => 'et', 'code' => 'et-EE', 'name' => 'Eesti', 'flag' => '🇪🇪' ),
+            array( 'slug' => 'en', 'code' => 'en-US', 'name' => 'English', 'flag' => '🇬🇧' ),
+            array( 'slug' => 'ru', 'code' => 'ru-RU', 'name' => 'Русский', 'flag' => '🇷🇺' ),
+            array( 'slug' => 'de', 'code' => 'de-DE', 'name' => 'Deutsch', 'flag' => '🇩🇪' ),
+            array( 'slug' => 'fi', 'code' => 'fi-FI', 'name' => 'Suomi', 'flag' => '🇫🇮' ),
+            array( 'slug' => 'lv', 'code' => 'lv-LV', 'name' => 'Latviešu', 'flag' => '🇱🇻' ),
+            array( 'slug' => 'lt', 'code' => 'lt-LT', 'name' => 'Lietuvių', 'flag' => '🇱🇹' ),
+            array( 'slug' => 'sv', 'code' => 'sv-SE', 'name' => 'Svenska', 'flag' => '🇸🇪' ),
+        );
+    }
+
     public static function create_string_tables() {
         global $wpdb;
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -839,7 +982,14 @@ final class SML_Core {
         $strings = self::strings_table();
         $translations = self::string_translations_table();
         dbDelta( "CREATE TABLE {$strings} ( id bigint(20) unsigned NOT NULL AUTO_INCREMENT, string_key char(64) NOT NULL, context longtext NOT NULL, name longtext NOT NULL, source_language varchar(20) NOT NULL, source_value longtext NOT NULL, PRIMARY KEY  (id), UNIQUE KEY string_key (string_key) ) {$charset};" );
-        dbDelta( "CREATE TABLE {$translations} ( id bigint(20) unsigned NOT NULL AUTO_INCREMENT, string_id bigint(20) unsigned NOT NULL, language varchar(20) NOT NULL, value longtext NOT NULL, updated_at datetime NOT NULL, PRIMARY KEY  (id), UNIQUE KEY string_language (string_id,language), KEY language (language) ) {$charset};" );
+        dbDelta( "CREATE TABLE {$translations} ( id bigint(20) unsigned NOT NULL AUTO_INCREMENT, string_id bigint(20) unsigned NOT NULL, language varchar(20) NOT NULL, value longtext NOT NULL, status varchar(20) NOT NULL DEFAULT 'verified', updated_at datetime NOT NULL, PRIMARY KEY  (id), UNIQUE KEY string_language (string_id,language), KEY language (language), KEY status (status) ) {$charset};" );
+
+        // dbDelta does not reliably add a column to every older custom-table
+        // variant, so complete this backwards-compatible migration explicitly.
+        $has_status = $wpdb->get_var( "SHOW COLUMNS FROM {$translations} LIKE 'status'" );
+        if ( ! $has_status ) {
+            $wpdb->query( "ALTER TABLE {$translations} ADD COLUMN status varchar(20) NOT NULL DEFAULT 'verified' AFTER value" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        }
     }
 
     public static function strings_table() {
@@ -874,6 +1024,72 @@ final class SML_Core {
         return $id;
     }
 
+    public static function find_string_id( $context, $name ) {
+        global $wpdb;
+        $context = (string) $context;
+        $name = (string) $name;
+        if ( '' === $context || '' === $name ) {
+            return 0;
+        }
+        $key = hash( 'sha256', $context . "\0" . $name );
+        if ( isset( self::$string_cache[ $key ] ) ) {
+            return (int) self::$string_cache[ $key ];
+        }
+        $id = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT id FROM ' . self::strings_table() . ' WHERE string_key = %s', $key ) );
+        self::$string_cache[ $key ] = $id;
+        return $id;
+    }
+
+    public static function get_string_translation( $string_id, $language, $fallback = '' ) {
+        global $wpdb;
+        $string_id = absint( $string_id );
+        $language = sanitize_key( $language );
+        if ( ! $string_id || ! $language ) {
+            return $fallback;
+        }
+        $cache_key = 'translation:' . $string_id . ':' . $language;
+        if ( array_key_exists( $cache_key, self::$string_cache ) ) {
+            return '' !== self::$string_cache[ $cache_key ] ? self::$string_cache[ $cache_key ] : $fallback;
+        }
+        $value = $wpdb->get_var( $wpdb->prepare( 'SELECT value FROM ' . self::string_translations_table() . ' WHERE string_id = %d AND language = %s', $string_id, $language ) );
+        self::$string_cache[ $cache_key ] = null === $value ? '' : (string) $value;
+        return '' !== self::$string_cache[ $cache_key ] ? self::$string_cache[ $cache_key ] : $fallback;
+    }
+
+    public static function get_string_translation_status( $string_id, $language ) {
+        global $wpdb;
+        $string_id = absint( $string_id );
+        $language = sanitize_key( $language );
+        if ( ! $string_id || ! $language ) {
+            return 'verified';
+        }
+        $status = $wpdb->get_var( $wpdb->prepare( 'SELECT status FROM ' . self::string_translations_table() . ' WHERE string_id = %d AND language = %s', $string_id, $language ) );
+        return 'needs_review' === $status ? 'needs_review' : 'verified';
+    }
+
+    public static function save_string_translation( $string_id, $language, $value, $status = 'verified' ) {
+        global $wpdb;
+        $string_id = absint( $string_id );
+        $language = sanitize_key( $language );
+        if ( ! $string_id || ! isset( self::get_languages()[ $language ] ) ) {
+            return false;
+        }
+        $table = self::string_translations_table();
+        $existing = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE string_id = %d AND language = %s", $string_id, $language ) );
+        $data = array(
+            'string_id'  => $string_id,
+            'language'   => $language,
+            'value'      => (string) $value,
+            'status'     => 'needs_review' === $status ? 'needs_review' : 'verified',
+            'updated_at' => current_time( 'mysql', true ),
+        );
+        $formats = array( '%d', '%s', '%s', '%s', '%s' );
+        if ( $existing ) {
+            return false !== $wpdb->update( $table, $data, array( 'id' => $existing ), $formats, array( '%d' ) );
+        }
+        return false !== $wpdb->insert( $table, $data, $formats );
+    }
+
     public static function translate_string( $context, $name, $fallback = '' ) {
         global $wpdb;
         $id = self::register_string( $context, $name, $fallback );
@@ -885,9 +1101,7 @@ final class SML_Core {
         if ( array_key_exists( $cache_key, self::$string_cache ) ) {
             return self::$string_cache[ $cache_key ];
         }
-        $table = self::string_translations_table();
-        $value = $wpdb->get_var( $wpdb->prepare( "SELECT value FROM {$table} WHERE string_id = %d AND language = %s", $id, $language ) );
-        self::$string_cache[ $cache_key ] = null !== $value && '' !== $value ? $value : $fallback;
+        self::$string_cache[ $cache_key ] = self::get_string_translation( $id, $language, $fallback );
         return self::$string_cache[ $cache_key ];
     }
 }

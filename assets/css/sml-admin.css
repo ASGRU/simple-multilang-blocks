@@ -1,0 +1,22 @@
+.sml-admin-wrap { max-width: 1380px; }
+.sml-language-settings-table input[type="text"] { box-sizing: border-box; width: 100%; }
+.sml-language-settings-table th, .sml-language-settings-table td { vertical-align: middle; }
+.sml-language-settings-table .sml-default-cell { width: 70px; text-align: center; }
+.sml-language-settings-table .sml-remove-heading { width: 38px; }
+.sml-checkbox-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px 18px; max-width: 960px; }
+.sml-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 18px 0; }
+.sml-toolbar form { margin: 0; }
+.sml-strings-table th { min-width: 185px; }
+.sml-strings-table td { min-width: 190px; }
+.sml-strings-table textarea { box-sizing: border-box; width: 100%; resize: vertical; }
+.sml-strings-table code { display: block; max-height: 140px; overflow: auto; white-space: pre-wrap; color: #1d2327; }
+.sml-language-actions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; max-width: 195px; }
+.sml-language-action { display: inline-flex; align-items: center; min-height: 26px; gap: 2px; padding: 0 5px; border: 1px solid; border-radius: 4px; font-weight: 600; text-decoration: none; }
+.sml-language-action .dashicons { width: 15px; height: 15px; font-size: 15px; }
+.sml-language-action.is-existing { border-color: #48a868; background: #f0fff3; color: #18793d; }
+.sml-language-action.is-missing { border-color: #a6adb4; background: #fff; color: #4d555d; }
+.sml-language-action.is-machine { border-color: #759ce7; background: #f1f5ff; color: #1d4ed8; }
+.sml-review-dot { width: 8px; height: 8px; border-radius: 50%; background: #d63638; }
+.sml-review-badge { display: inline-block; margin-left: 5px; padding: 2px 5px; border-radius: 3px; background: #fff3cd; color: #6b4d00; font-size: 11px; font-weight: 600; }
+.sml-review-status .dashicons { color: #dba617; }
+.column-sml_languages { width: 205px; }

@@ -3,7 +3,7 @@
  * Plugin Name:       Simple Multilang Blocks
  * Plugin URI:        https://github.com/ASGRU/simple-multilang-blocks
  * Description:       A lightweight multilingual layer for block-based WordPress sites.
- * Version:           1.2.5
+ * Version:           1.3.0-dev
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Author:            ASGRU
@@ -15,13 +15,16 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'SML_VERSION', '1.2.5' );
+define( 'SML_VERSION', '1.3.0-dev' );
 define( 'SML_FILE', __FILE__ );
 define( 'SML_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SML_BASENAME', plugin_basename( __FILE__ ) );
 define( 'SML_GITHUB_REPOSITORY', 'ASGRU/simple-multilang-blocks' );
 
 require_once SML_DIR . 'includes/class-sml-core.php';
+require_once SML_DIR . 'includes/class-sml-translation-service.php';
+require_once SML_DIR . 'includes/class-sml-theme-strings.php';
+require_once SML_DIR . 'includes/class-sml-admin.php';
 require_once SML_DIR . 'includes/class-sml-github-updater.php';
 require_once SML_DIR . 'includes/class-sml-wpml-migrator.php';
 
@@ -29,6 +32,8 @@ register_activation_hook( SML_FILE, array( 'SML_Core', 'activate' ) );
 register_deactivation_hook( SML_FILE, array( 'SML_Core', 'deactivate' ) );
 
 SML_Core::instance();
+SML_Theme_Strings::instance();
+SML_Admin::instance();
 SML_GitHub_Updater::instance();
 
 if ( defined( 'WP_CLI' ) && WP_CLI ) {
