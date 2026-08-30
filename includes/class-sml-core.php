@@ -253,6 +253,7 @@ final class SML_Core {
         $post_id = self::find_post_for_path( $path, $language );
         if ( $post_id ) {
             $wp->query_vars['p'] = $post_id;
+            $wp->query_vars['post_type'] = get_post_type( $post_id );
             return;
         }
 
