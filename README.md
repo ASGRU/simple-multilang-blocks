@@ -15,7 +15,7 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 
 ## Release process
 
-Push a semantic-version tag such as `v1.6.2`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
+Push a semantic-version tag such as `v1.6.3`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
@@ -60,7 +60,7 @@ Further extension points are `sml_language_switcher_args`, `sml_language_switche
 
 ## Language-specific home pages
 
-WordPress stores one static homepage in **Settings → Reading**. Create or link its translations in the **Language & translations** panel on that source page; do not configure each translation separately in WordPress. Once published, Simple Multilang serves the linked page from the language root (for example `/ru/`), makes `is_front_page()` true so the theme uses its homepage template, localises ordinary home links such as the site logo, and redirects the translated page's old slug URL to the language root.
+WordPress stores one static homepage in **Settings → Reading**. **Settings → Simple Multilang → Language home pages** shows the source page and the state of every language version in one table. Create a safe manual draft (or queue an available automatic provider) for a missing language, then review and publish it. The same controls and a clear homepage notice are available in the source page's **Language & translations** panel; do not configure each translation separately in WordPress. Once published, Simple Multilang serves the linked page from the language root (for example `/ru/`), makes `is_front_page()` true so the theme uses its homepage template, localises ordinary home links such as the site logo, and redirects the translated page's old slug URL to the language root.
 
 ## Menus
 

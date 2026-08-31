@@ -1268,6 +1268,8 @@ final class SML_Core {
         $languages = self::get_languages();
         $current = self::get_post_language( $post->ID );
         $translations = self::get_post_translations( $post->ID );
+        $is_language_home = self::is_translated_front_page( $post->ID );
+        $is_source_home = $is_language_home && self::front_page_source_id() === (int) $post->ID;
         wp_nonce_field( 'sml_save_post_language_' . $post->ID, 'sml_post_language_nonce' );
         ?>
         <p><label for="sml-language"><strong><?php esc_html_e( 'Language', 'simple-multilang-blocks' ); ?></strong></label><br>
@@ -1277,6 +1279,9 @@ final class SML_Core {
             <?php endforeach; ?>
         </select></p>
         <p class="description"><?php esc_html_e( 'Create a linked draft for a language, then edit and publish it only after verification. Machine translations are always created as drafts marked “Requires review”.', 'simple-multilang-blocks' ); ?></p>
+        <?php if ( $is_language_home ) : ?>
+            <div class="notice notice-info inline sml-language-home-notice"><p><strong><?php esc_html_e( 'Language homepage', 'simple-multilang-blocks' ); ?></strong> <?php echo esc_html( $is_source_home ? __( 'This is the source static homepage. A published linked translation is served from that language’s site root.', 'simple-multilang-blocks' ) : __( 'This is a linked static-homepage translation. When published, it is served from this language’s site root.', 'simple-multilang-blocks' ) ); ?></p></div>
+        <?php endif; ?>
         <?php foreach ( $languages as $slug => $data ) : ?>
             <p class="sml-editor-translation-row"><strong><?php echo esc_html( self::get_language_flag( $data ) . ' ' . $data['name'] ); ?></strong><br>
             <?php if ( ! empty( $translations[ $slug ] ) ) : $translation_id = absint( $translations[ $slug ] ); ?>
@@ -1900,6 +1905,10 @@ final class SML_Core {
         $switcher_has_custom_colors = (bool) array_filter( array_intersect_key( $switcher_design, array_flip( array( 'surface', 'foreground', 'accent', 'active_foreground', 'border' ) ) ) );
         $openai_models = SML_Translation_Service::openai_models();
         $selected_openai_model = SML_Translation_Service::openai_model();
+        $front_page_id = 'page' === get_option( 'show_on_front' ) ? self::front_page_source_id() : 0;
+        $front_page_translations = $front_page_id ? self::get_post_translations( $front_page_id ) : array();
+        $can_edit_front_page = $front_page_id && current_user_can( 'edit_post', $front_page_id );
+        $automatic_translation_available = class_exists( 'SML_Translation_Service' ) && SML_Translation_Service::is_available();
         ?>
         <div class="wrap sml-admin-wrap"><h1><?php esc_html_e( 'Simple Multilang settings', 'simple-multilang-blocks' ); ?></h1>
         <?php if ( isset( $_GET['updated'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Settings saved. Rewrite rules were refreshed.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
@@ -1922,6 +1931,37 @@ final class SML_Core {
         </tbody></table>
         <p><button type="button" class="button" id="sml-add-language"><?php esc_html_e( 'Add language', 'simple-multilang-blocks' ); ?></button></p>
         <template id="sml-language-row-template"><tr><td><input type="text" data-field="slug"></td><td><input type="text" data-field="code"></td><td><input type="text" data-field="name"></td><td><input type="text" data-field="flag"></td><td class="sml-default-cell"><input type="radio" data-field="default"></td><td><select class="sml-language-preset"><option value=""><?php esc_html_e( '— Choose —', 'simple-multilang-blocks' ); ?></option><?php foreach ( $presets as $preset ) : ?><option value="<?php echo esc_attr( wp_json_encode( $preset ) ); ?>"><?php echo esc_html( $preset['flag'] . ' ' . $preset['name'] . ' (' . $preset['code'] . ')' ); ?></option><?php endforeach; ?></select></td><td><button type="button" class="button-link-delete sml-remove-language" aria-label="<?php esc_attr_e( 'Delete language', 'simple-multilang-blocks' ); ?>">×</button></td></tr></template>
+        <h2><?php esc_html_e( 'Language home pages', 'simple-multilang-blocks' ); ?></h2>
+        <?php if ( ! $front_page_id || 'page' !== get_post_type( $front_page_id ) ) : ?>
+            <div class="notice notice-info inline"><p><?php esc_html_e( 'The site is currently showing latest posts on its front page. Choose a static homepage in Settings → Reading to create one homepage per language.', 'simple-multilang-blocks' ); ?> <a href="<?php echo esc_url( admin_url( 'options-reading.php' ) ); ?>"><?php esc_html_e( 'Open Reading settings', 'simple-multilang-blocks' ); ?></a></p></div>
+        <?php elseif ( ! $can_edit_front_page ) : ?>
+            <div class="notice notice-warning inline"><p><?php esc_html_e( 'You do not have permission to edit the configured static homepage.', 'simple-multilang-blocks' ); ?></p></div>
+        <?php else : ?>
+            <p class="description"><?php esc_html_e( 'A published linked page is automatically served from the root URL of its language, such as /ru/. Drafts are never public until you review and publish them.', 'simple-multilang-blocks' ); ?></p>
+            <table class="widefat striped sml-homepage-table"><thead><tr><th><?php esc_html_e( 'Language', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Page', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Status', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Public URL', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Actions', 'simple-multilang-blocks' ); ?></th></tr></thead><tbody>
+            <?php foreach ( $languages as $language ) :
+                $language_slug = sanitize_key( $language['slug'] );
+                $translation_id = ! empty( $front_page_translations[ $language_slug ] ) ? absint( $front_page_translations[ $language_slug ] ) : 0;
+                $translation = $translation_id ? get_post( $translation_id ) : null;
+                if ( ! $translation || 'page' !== $translation->post_type || 'trash' === $translation->post_status ) {
+                    $translation_id = 0;
+                    $translation = null;
+                }
+                $is_source = $translation_id === $front_page_id;
+                $status = $translation ? get_post_status_object( $translation->post_status ) : null;
+                $manual_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_create_translation', 'post' => $front_page_id, 'lang' => $language_slug ), admin_url( 'admin-post.php' ) ), 'sml_create_translation_' . $front_page_id . '_' . $language_slug );
+                $machine_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_translate_post', 'post' => $front_page_id, 'lang' => $language_slug ), admin_url( 'admin-post.php' ) ), 'sml_translate_post_' . $front_page_id . '_' . $language_slug );
+            ?>
+                <tr>
+                    <td><?php echo esc_html( self::get_language_flag( $language ) . ' ' . $language['name'] ); ?></td>
+                    <td><?php if ( $translation ) : ?><a href="<?php echo esc_url( get_edit_post_link( $translation_id, '' ) ); ?>"><?php echo esc_html( get_the_title( $translation_id ) ?: __( '(no title)', 'simple-multilang-blocks' ) ); ?></a><?php else : ?><span class="description"><?php esc_html_e( 'Not created', 'simple-multilang-blocks' ); ?></span><?php endif; ?></td>
+                    <td><?php if ( $is_source ) : ?><span class="sml-homepage-status is-source"><?php esc_html_e( 'Source page', 'simple-multilang-blocks' ); ?></span><?php elseif ( $translation ) : ?><span class="sml-homepage-status <?php echo 'publish' === $translation->post_status ? 'is-published' : 'is-draft'; ?>"><?php echo esc_html( $status ? $status->label : $translation->post_status ); ?></span><?php else : ?><span class="sml-homepage-status is-missing"><?php esc_html_e( 'Missing', 'simple-multilang-blocks' ); ?></span><?php endif; ?></td>
+                    <td><?php if ( $translation && 'publish' === $translation->post_status ) : ?><a href="<?php echo esc_url( get_permalink( $translation_id ) ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( self::language_home_url( $language_slug ) ); ?><span class="screen-reader-text"> <?php esc_html_e( '(opens in a new tab)', 'simple-multilang-blocks' ); ?></span></a><?php else : ?><span class="description">—</span><?php endif; ?></td>
+                    <td class="sml-homepage-actions"><?php if ( $translation ) : ?><a class="button button-small" href="<?php echo esc_url( get_edit_post_link( $translation_id, '' ) ); ?>"><?php echo esc_html( 'publish' === $translation->post_status ? __( 'Edit', 'simple-multilang-blocks' ) : __( 'Edit draft', 'simple-multilang-blocks' ) ); ?></a><?php else : ?><a class="button button-small" href="<?php echo esc_url( $manual_url ); ?>"><?php esc_html_e( 'Create draft', 'simple-multilang-blocks' ); ?></a><?php if ( $automatic_translation_available ) : ?> <a class="button button-small button-secondary" href="<?php echo esc_url( $machine_url ); ?>"><?php esc_html_e( 'Auto-translate', 'simple-multilang-blocks' ); ?></a><?php endif; ?><?php endif; ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody></table>
+        <?php endif; ?>
         <h2><?php esc_html_e( 'Translatable content', 'simple-multilang-blocks' ); ?></h2><div class="sml-checkbox-grid">
         <?php foreach ( $post_types as $name => $object ) : if ( 'attachment' === $name ) { continue; } ?><label><input type="checkbox" name="sml_post_types[]" value="<?php echo esc_attr( $name ); ?>" <?php checked( in_array( $name, self::get_post_types(), true ) ); ?>> <?php echo esc_html( $object->labels->name ); ?></label><?php endforeach; ?>
         </div><h3><?php esc_html_e( 'Translatable taxonomies', 'simple-multilang-blocks' ); ?></h3><div class="sml-checkbox-grid">

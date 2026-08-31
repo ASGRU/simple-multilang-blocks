@@ -26,4 +26,13 @@
 .sml-job-status.is-retry { background: #fff3cd; color: #6b4d00; }
 .sml-job-status.is-failed { background: #fbeaea; color: #8a2424; }
 .sml-migration-summary { margin: 8px 0 8px 20px; list-style: disc; }
+.sml-language-home-notice { margin: 12px 0; }
+.sml-homepage-table { max-width: 1120px; margin: 12px 0 22px; }
+.sml-homepage-table th, .sml-homepage-table td { vertical-align: middle; }
+.sml-homepage-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.sml-homepage-status { display: inline-block; padding: 3px 7px; border-radius: 10px; font-size: 12px; font-weight: 600; }
+.sml-homepage-status.is-source { background: #e7f5fe; color: #0a4b78; }
+.sml-homepage-status.is-published { background: #edfaef; color: #176b36; }
+.sml-homepage-status.is-draft { background: #fff3cd; color: #6b4d00; }
+.sml-homepage-status.is-missing { background: #f1f1f1; color: #50575e; }
 .column-sml_languages { width: 205px; }
