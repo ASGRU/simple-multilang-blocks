@@ -18,10 +18,11 @@ final class SML_Translation_Service {
     const OPTION_TERM_JOBS      = 'sml_term_translation_jobs';
     const CRON_HOOK             = 'sml_process_translation_job';
     const TERM_CRON_HOOK        = 'sml_process_term_translation_job';
-    const DEFAULT_OPENAI_MODEL  = 'gpt-5-mini';
+    const DEFAULT_OPENAI_MODEL  = 'gpt-5.4-mini';
     const DEFAULT_ON_DEMAND_DAILY_LIMIT = 10;
     const MAX_ATTEMPTS          = 3;
     const MAX_STORED_JOBS       = 100;
+    const INTERFACE_STRING_BATCH_SIZE = 20;
 
     /** Register the deliberately small, WordPress-native background queue. */
     public static function init() {
@@ -53,18 +54,18 @@ final class SML_Translation_Service {
     public static function openai_models() {
         $models = array(
             self::DEFAULT_OPENAI_MODEL => array(
-                'label'       => 'GPT-5 mini',
-                'description' => __( 'Recommended — balanced translation quality, speed and cost.', 'simple-multilang-blocks' ),
+                'label'       => 'GPT-5.4 mini',
+                'description' => __( 'Recommended — current high-quality, efficient model for interface and content translation.', 'simple-multilang-blocks' ),
             ),
-            'gpt-5-nano' => array(
-                'label'       => 'GPT-5 nano',
-                'description' => __( 'Lowest cost — use for simple, high-volume content after editorial evaluation.', 'simple-multilang-blocks' ),
+            'gpt-5.4-nano' => array(
+                'label'       => 'GPT-5.4 nano',
+                'description' => __( 'Lowest cost — use for simple, high-volume interface strings after editorial evaluation.', 'simple-multilang-blocks' ),
             ),
         );
         $models = apply_filters( 'sml_openai_translation_models', $models );
         $sanitized = array();
         foreach ( (array) $models as $model => $details ) {
-            $model = sanitize_key( (string) $model );
+            $model = self::sanitize_openai_model( $model );
             if ( ! $model || ! is_array( $details ) || empty( $details['label'] ) || ! is_scalar( $details['label'] ) ) {
                 continue;
             }
@@ -75,8 +76,8 @@ final class SML_Translation_Service {
         }
         if ( ! isset( $sanitized[ self::DEFAULT_OPENAI_MODEL ] ) ) {
             $sanitized[ self::DEFAULT_OPENAI_MODEL ] = array(
-                'label'       => 'GPT-5 mini',
-                'description' => __( 'Recommended — balanced translation quality, speed and cost.', 'simple-multilang-blocks' ),
+                'label'       => 'GPT-5.4 mini',
+                'description' => __( 'Recommended — current high-quality, efficient model for interface and content translation.', 'simple-multilang-blocks' ),
             );
         }
         return $sanitized;
@@ -85,9 +86,15 @@ final class SML_Translation_Service {
     /** Returns only a reviewed model from the selected list. */
     public static function openai_model() {
         $model = defined( 'SML_OPENAI_MODEL' ) ? (string) SML_OPENAI_MODEL : (string) get_option( self::OPTION_OPENAI_MODEL, self::DEFAULT_OPENAI_MODEL );
-        $model = sanitize_key( $model );
+        $model = self::sanitize_openai_model( $model );
         $models = self::openai_models();
         return isset( $models[ $model ] ) ? $model : self::DEFAULT_OPENAI_MODEL;
+    }
+
+    /** Allows documented model IDs with dots while rejecting unsafe values. */
+    public static function sanitize_openai_model( $model ) {
+        $model = strtolower( trim( (string) $model ) );
+        return preg_match( '/^[a-z0-9][a-z0-9._-]{0,99}$/', $model ) ? $model : '';
     }
 
     public static function is_available() {
@@ -842,6 +849,70 @@ final class SML_Translation_Service {
     }
 
     /**
+     * Translates one editor-selected, bounded batch of interface strings.
+     * The caller is responsible for the capability and nonce checks; this
+     * method performs no database writes and never receives API credentials.
+     *
+     * @param array<int,array{id:int,value:string}> $strings
+     * @return array<int,string>|WP_Error String ID => translated value.
+     */
+    public static function translate_interface_strings( $strings, $source_language, $target_language ) {
+        $source_language = sanitize_key( $source_language );
+        $target_language = sanitize_key( $target_language );
+        $languages = SML_Core::get_languages();
+        if ( ! isset( $languages[ $source_language ], $languages[ $target_language ] ) || $source_language === $target_language ) {
+            return new WP_Error( 'sml_invalid_language', __( 'Choose two different configured languages for interface-string translation.', 'simple-multilang-blocks' ) );
+        }
+        if ( ! self::is_available() ) {
+            return new WP_Error( 'sml_provider_unavailable', __( 'The selected translation service is unavailable. No interface strings were changed.', 'simple-multilang-blocks' ) );
+        }
+
+        $fields = array();
+        $field_ids = array();
+        foreach ( array_slice( (array) $strings, 0, self::INTERFACE_STRING_BATCH_SIZE ) as $entry ) {
+            $id = isset( $entry['id'] ) ? absint( $entry['id'] ) : 0;
+            $value = isset( $entry['value'] ) && is_scalar( $entry['value'] ) ? (string) $entry['value'] : '';
+            if ( ! $id || '' === trim( $value ) || strlen( $value ) > 5000 ) {
+                continue;
+            }
+            $field = 'string_' . $id;
+            if ( isset( $field_ids[ $field ] ) ) {
+                continue;
+            }
+            $fields[ $field ] = $value;
+            $field_ids[ $field ] = $id;
+        }
+        if ( ! $fields ) {
+            return new WP_Error( 'sml_string_batch_empty', __( 'There are no eligible interface strings in this batch.', 'simple-multilang-blocks' ) );
+        }
+
+        $protected = self::protect_translatable_fields( $fields );
+        if ( 'deepl' === self::provider() ) {
+            $translated = self::translate_with_deepl( $protected['fields'], $source_language, $target_language );
+        } elseif ( 'openai' === self::provider() ) {
+            $translated = self::translate_interface_strings_with_openai( $protected['fields'], $source_language, $target_language );
+        } else {
+            return new WP_Error( 'sml_provider_missing', __( 'Select DeepL or OpenAI in Simple Multilang settings.', 'simple-multilang-blocks' ) );
+        }
+        if ( is_wp_error( $translated ) ) {
+            return $translated;
+        }
+        $translated = self::restore_translated_fields( $translated, $protected['tokens'] );
+        if ( is_wp_error( $translated ) ) {
+            return $translated;
+        }
+
+        $result = array();
+        foreach ( $field_ids as $field => $id ) {
+            if ( ! isset( $translated[ $field ] ) || ! is_scalar( $translated[ $field ] ) ) {
+                return new WP_Error( 'sml_string_batch_incomplete', __( 'The translation service returned an incomplete interface-string batch. No strings were changed.', 'simple-multilang-blocks' ) );
+            }
+            $result[ $id ] = (string) $translated[ $field ];
+        }
+        return $result;
+    }
+
+    /**
      * Replaces non-translatable document fragments with one-use opaque tokens.
      *
      * @return array{fields: array, tokens: array}
@@ -886,6 +957,11 @@ final class SML_Translation_Service {
                 $content = preg_replace_callback( '/' . $shortcode_pattern . '/s', $replace, $content );
             }
             $content = preg_replace_callback( '~\[(?:/)?[A-Za-z][A-Za-z0-9:_-]*(?:\s+[^\[\]]*)?/?\]~', $replace, $content );
+            // gettext strings commonly contain values inserted by sprintf(),
+            // JavaScript templates or WooCommerce. These are executable data
+            // at render time, so a translated string must keep them verbatim.
+            $content = preg_replace_callback( '~%%|%(?:\d+\$)?[-+0 #]?(?:\d+)?(?:\.\d+)?[bcdeEfFgGosuxX]~', $replace, $content );
+            $content = preg_replace_callback( '~\{\{[^{}]+\}\}|\{[A-Za-z_][A-Za-z0-9_.-]*\}~', $replace, $content );
             $protected_fields[ $field ] = is_string( $content ) ? $content : (string) $value;
         }
 
@@ -1030,6 +1106,75 @@ final class SML_Translation_Service {
             'excerpt' => (string) $result['excerpt'],
             'content' => (string) $result['content'],
         );
+    }
+
+    /**
+     * Uses one JSON response for a bounded interface-string batch. IDs are
+     * transport-only values, checked against the original request below.
+     *
+     * @return array|WP_Error
+     */
+    private static function translate_interface_strings_with_openai( $fields, $source_language, $target_language ) {
+        $languages = SML_Core::get_languages();
+        $model = self::openai_model();
+        if ( '' === $model ) {
+            return new WP_Error( 'sml_openai_model', __( 'An OpenAI model must be configured before translating.', 'simple-multilang-blocks' ) );
+        }
+
+        $items = array();
+        foreach ( (array) $fields as $field => $value ) {
+            $items[] = array(
+                'id'   => (string) $field,
+                'text' => (string) $value,
+            );
+        }
+        $instructions = sprintf(
+            'Translate every supplied interface-string text from %1$s to %2$s. Strings matching __SML_PROTECTED_[A-F0-9]+_[0-9]+__ are opaque structural tokens: copy every one exactly once, unchanged. They can represent markup, URLs, shortcodes or format placeholders. Translate only the remaining human-readable text. Do not add explanations. Return one JSON object with exactly one key, translations. Its value must be an array of objects with exactly id and text; return each input id exactly once.',
+            $languages[ $source_language ]['name'],
+            $languages[ $target_language ]['name']
+        );
+        $payload = array(
+            'model'        => $model,
+            'store'        => false,
+            'instructions' => $instructions,
+            'input'        => 'json: ' . wp_json_encode( array( 'strings' => $items ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
+            'text'         => array( 'format' => array( 'type' => 'json_object' ) ),
+        );
+        $response = wp_remote_post( 'https://api.openai.com/v1/responses', array(
+            'timeout' => 40,
+            'headers' => array(
+                'Authorization' => 'Bearer ' . (string) SML_OPENAI_API_KEY,
+                'Content-Type'  => 'application/json',
+                'Accept'        => 'application/json',
+            ),
+            'body' => wp_json_encode( $payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
+        ) );
+        if ( is_wp_error( $response ) ) {
+            return new WP_Error( 'sml_openai_connection', __( 'OpenAI is temporarily unavailable. No interface strings were changed.', 'simple-multilang-blocks' ) );
+        }
+        $status = (int) wp_remote_retrieve_response_code( $response );
+        $data = json_decode( wp_remote_retrieve_body( $response ), true );
+        if ( $status < 200 || $status >= 300 || ! is_array( $data ) ) {
+            return new WP_Error( 'sml_openai_response', __( 'OpenAI could not complete the interface-string translation. No strings were changed.', 'simple-multilang-blocks' ) );
+        }
+
+        $result = json_decode( self::openai_output_text( $data ), true );
+        if ( ! is_array( $result ) || empty( $result['translations'] ) || ! is_array( $result['translations'] ) ) {
+            return new WP_Error( 'sml_openai_invalid', __( 'OpenAI returned an invalid interface-string translation. No strings were changed.', 'simple-multilang-blocks' ) );
+        }
+        $expected = array_fill_keys( array_keys( $fields ), true );
+        $translated = array();
+        foreach ( $result['translations'] as $entry ) {
+            $field = isset( $entry['id'] ) && is_scalar( $entry['id'] ) ? (string) $entry['id'] : '';
+            if ( ! isset( $expected[ $field ] ) || isset( $translated[ $field ] ) || ! isset( $entry['text'] ) || ! is_scalar( $entry['text'] ) ) {
+                return new WP_Error( 'sml_openai_invalid', __( 'OpenAI returned an invalid interface-string translation. No strings were changed.', 'simple-multilang-blocks' ) );
+            }
+            $translated[ $field ] = (string) $entry['text'];
+        }
+        if ( count( $translated ) !== count( $expected ) ) {
+            return new WP_Error( 'sml_openai_invalid', __( 'OpenAI returned an incomplete interface-string translation. No strings were changed.', 'simple-multilang-blocks' ) );
+        }
+        return $translated;
     }
 
     private static function openai_output_text( $data ) {

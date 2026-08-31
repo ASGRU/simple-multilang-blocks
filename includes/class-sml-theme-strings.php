@@ -29,6 +29,7 @@ final class SML_Theme_Strings {
         add_action( 'admin_menu', array( $this, 'register_page' ) );
         add_action( 'admin_post_sml_scan_theme_strings', array( $this, 'scan_theme_strings' ) );
         add_action( 'admin_post_sml_save_theme_strings', array( $this, 'save_theme_strings' ) );
+        add_action( 'admin_post_sml_auto_translate_theme_strings', array( $this, 'auto_translate_theme_strings' ) );
         add_action( 'admin_post_sml_export_po', array( $this, 'export_po' ) );
         add_action( 'admin_post_sml_import_po', array( $this, 'import_po' ) );
     }
@@ -208,6 +209,8 @@ final class SML_Theme_Strings {
             <p class="description"><?php esc_html_e( 'Strings come from the active theme, selected plugins and imported WPML String Translation records. Their existing source text is retained as a fallback; translations apply only to the public site interface and never modify source, PO or MO files.', 'simple-multilang-blocks' ); ?></p>
             <?php if ( isset( $_GET['scanned'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Theme and selected plugin strings were catalogued.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
             <?php if ( isset( $_GET['saved'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'String translations saved.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
+            <?php if ( isset( $_GET['auto_translated'] ) ) : ?><div class="notice notice-success"><p><?php echo esc_html( sprintf( _n( 'Machine-translated %d interface string. It requires review before public use.', 'Machine-translated %d interface strings. They require review before public use.', absint( $_GET['auto_translated'] ), 'simple-multilang-blocks' ), absint( $_GET['auto_translated'] ) ) ); ?><?php if ( ! empty( $_GET['auto_skipped'] ) ) : ?> <?php echo esc_html( sprintf( _n( '%d existing translation was left unchanged.', '%d existing translations were left unchanged.', absint( $_GET['auto_skipped'] ), 'simple-multilang-blocks' ), absint( $_GET['auto_skipped'] ) ) ); ?><?php endif; ?></p></div><?php endif; ?>
+            <?php if ( isset( $_GET['auto_error'] ) ) : ?><div class="notice notice-warning"><p><?php echo esc_html( self::auto_translate_error_message( sanitize_key( wp_unslash( $_GET['auto_error'] ) ) ) ); ?></p></div><?php endif; ?>
             <?php if ( isset( $_GET['po_imported'] ) ) : ?><div class="notice notice-success"><p><?php echo esc_html( sprintf( __( 'Imported %d interface-string translations from the PO file.', 'simple-multilang-blocks' ), absint( $_GET['po_imported'] ) ) ); ?></p></div><?php endif; ?>
             <?php if ( isset( $_GET['po_error'] ) ) : ?><div class="notice notice-warning"><p><?php esc_html_e( 'The PO file could not be imported. Select a small valid .po file exported by Simple Multilang.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
 
@@ -268,6 +271,21 @@ final class SML_Theme_Strings {
                 </table>
                 <?php if ( $rows ) : ?><p><button class="button button-primary"><?php esc_html_e( 'Save translations', 'simple-multilang-blocks' ); ?></button></p><?php endif; ?>
             </form>
+            <?php if ( $rows ) : $default_language = SML_Core::get_default_language(); $default_target = ''; foreach ( $languages as $language_slug => $language ) { if ( $language_slug !== $default_language ) { $default_target = $language_slug; break; } } ?>
+                <form class="sml-string-auto-translate" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                    <?php wp_nonce_field( 'sml_auto_translate_theme_strings' ); ?>
+                    <input type="hidden" name="action" value="sml_auto_translate_theme_strings">
+                    <input type="hidden" name="s" value="<?php echo esc_attr( $search ); ?>">
+                    <input type="hidden" name="source" value="<?php echo esc_attr( $source ); ?>">
+                    <input type="hidden" name="paged" value="<?php echo esc_attr( $page ); ?>">
+                    <?php foreach ( $rows as $row ) : ?><input type="hidden" name="sml_string_ids[]" value="<?php echo esc_attr( $row->id ); ?>"><?php endforeach; ?>
+                    <strong><?php esc_html_e( 'Automatic translation', 'simple-multilang-blocks' ); ?></strong>
+                    <label><?php esc_html_e( 'Source language', 'simple-multilang-blocks' ); ?> <select name="source_language"><?php foreach ( $languages as $language_slug => $language ) : ?><option value="<?php echo esc_attr( $language_slug ); ?>" <?php selected( $default_language, $language_slug ); ?>><?php echo esc_html( $language['name'] ); ?></option><?php endforeach; ?></select></label>
+                    <label><?php esc_html_e( 'Translate to', 'simple-multilang-blocks' ); ?> <select name="target_language"><?php foreach ( $languages as $language_slug => $language ) : ?><option value="<?php echo esc_attr( $language_slug ); ?>" <?php selected( $default_target, $language_slug ); ?>><?php echo esc_html( $language['name'] ); ?></option><?php endforeach; ?></select></label>
+                    <button class="button button-secondary" <?php disabled( ! SML_Translation_Service::is_available() ); ?>><?php esc_html_e( 'Auto-translate missing strings (up to 20)', 'simple-multilang-blocks' ); ?></button>
+                    <p class="description"><?php esc_html_e( 'Only visible strings without a saved translation are sent. The request is available only to administrators, is protected by a nonce, and each returned value is marked Requires review.', 'simple-multilang-blocks' ); ?><?php if ( ! SML_Translation_Service::is_available() ) : ?> <?php esc_html_e( 'Configure a translation provider and its wp-config.php credential first.', 'simple-multilang-blocks' ); ?><?php endif; ?></p>
+                </form>
+            <?php endif; ?>
             <?php
             $pages = max( 1, (int) ceil( $total / $per_page ) );
             if ( $pages > 1 ) {
@@ -401,6 +419,91 @@ final class SML_Theme_Strings {
         $url = add_query_arg( array( 'saved' => '1', 's' => isset( $_POST['s'] ) ? sanitize_text_field( $_POST['s'] ) : '', 'source' => isset( $_POST['source'] ) ? sanitize_text_field( $_POST['source'] ) : '', 'paged' => absint( $_POST['paged'] ?? 1 ) ), admin_url( 'options-general.php?page=sml-theme-strings' ) );
         wp_safe_redirect( $url );
         exit;
+    }
+
+    /** Runs an administrator-confirmed, bounded machine-translation batch. */
+    public function auto_translate_theme_strings() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You are not allowed to automatically translate interface strings.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( 'sml_auto_translate_theme_strings' );
+        $source_language = isset( $_POST['source_language'] ) ? sanitize_key( wp_unslash( $_POST['source_language'] ) ) : '';
+        $target_language = isset( $_POST['target_language'] ) ? sanitize_key( wp_unslash( $_POST['target_language'] ) ) : '';
+        $source = isset( $_POST['source'] ) ? sanitize_text_field( wp_unslash( $_POST['source'] ) ) : '';
+        $ids = isset( $_POST['sml_string_ids'] ) && is_array( $_POST['sml_string_ids'] ) ? array_values( array_unique( array_filter( array_map( 'absint', wp_unslash( $_POST['sml_string_ids'] ) ) ) ) ) : array();
+        $ids = array_slice( $ids, 0, SML_Translation_Service::INTERFACE_STRING_BATCH_SIZE );
+        $return_args = array(
+            's'      => isset( $_POST['s'] ) ? sanitize_text_field( wp_unslash( $_POST['s'] ) ) : '',
+            'source' => $source,
+            'paged'  => max( 1, absint( $_POST['paged'] ?? 1 ) ),
+        );
+        if ( ! $ids ) {
+            $this->redirect_auto_translate_result( array_merge( $return_args, array( 'auto_error' => 'sml_string_batch_empty' ) ) );
+        }
+
+        $rows = self::auto_translate_candidates( $ids, $target_language, $source );
+        if ( ! $rows ) {
+            $this->redirect_auto_translate_result( array_merge( $return_args, array( 'auto_error' => 'sml_string_batch_empty' ) ) );
+        }
+        $strings = array();
+        foreach ( $rows as $row ) {
+            $strings[] = array(
+                'id'    => absint( $row->id ),
+                'value' => (string) $row->source_value,
+            );
+        }
+        $translated = SML_Translation_Service::translate_interface_strings( $strings, $source_language, $target_language );
+        if ( is_wp_error( $translated ) ) {
+            $this->redirect_auto_translate_result( array_merge( $return_args, array( 'auto_error' => sanitize_key( $translated->get_error_code() ) ) ) );
+        }
+
+        $saved = 0;
+        foreach ( $translated as $string_id => $value ) {
+            if ( '' !== trim( (string) $value ) && SML_Core::save_string_translation( $string_id, $target_language, wp_kses_post( $value ), 'needs_review' ) ) {
+                ++$saved;
+            }
+        }
+        if ( ! $saved ) {
+            $this->redirect_auto_translate_result( array_merge( $return_args, array( 'auto_error' => 'sml_string_batch_incomplete' ) ) );
+        }
+        $this->redirect_auto_translate_result( array_merge( $return_args, array( 'auto_translated' => $saved, 'auto_skipped' => max( 0, count( $ids ) - $saved ) ) ) );
+    }
+
+    /** Returns at most one safe editor batch, never overwriting saved work. */
+    private static function auto_translate_candidates( $ids, $target_language, $source ) {
+        global $wpdb;
+        $ids = array_slice( array_values( array_unique( array_filter( array_map( 'absint', (array) $ids ) ) ) ), 0, SML_Translation_Service::INTERFACE_STRING_BATCH_SIZE );
+        $target_language = sanitize_key( $target_language );
+        $source = sanitize_text_field( (string) $source );
+        if ( ! $ids || ! isset( SML_Core::get_languages()[ $target_language ] ) ) {
+            return array();
+        }
+        $strings = SML_Core::strings_table();
+        $translations = SML_Core::string_translations_table();
+        $id_placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+        $sql = "SELECT s.id, s.source_value FROM {$strings} s LEFT JOIN {$translations} t ON t.string_id = s.id AND t.language = %s WHERE s.id IN ({$id_placeholders}) AND s.source_value != '' AND (t.id IS NULL OR t.value = '')";
+        $args = array_merge( array( $target_language ), $ids );
+        if ( '' !== $source ) {
+            $sql .= ' AND s.context = %s';
+            $args[] = $source;
+        }
+        $sql .= ' ORDER BY s.id ASC LIMIT ' . SML_Translation_Service::INTERFACE_STRING_BATCH_SIZE;
+        return $wpdb->get_results( $wpdb->prepare( $sql, $args ) );
+    }
+
+    private function redirect_auto_translate_result( $args ) {
+        wp_safe_redirect( add_query_arg( $args, admin_url( 'options-general.php?page=sml-theme-strings' ) ) );
+        exit;
+    }
+
+    private static function auto_translate_error_message( $code ) {
+        $messages = array(
+            'sml_provider_unavailable'  => __( 'The translation provider is not configured or is temporarily unavailable. No interface strings were changed.', 'simple-multilang-blocks' ),
+            'sml_invalid_language'      => __( 'Choose two different configured languages before translating interface strings.', 'simple-multilang-blocks' ),
+            'sml_string_batch_empty'    => __( 'There are no missing interface-string translations in this visible batch.', 'simple-multilang-blocks' ),
+            'sml_translation_structure' => __( 'The provider could not preserve protected placeholders or markup. No interface strings were changed.', 'simple-multilang-blocks' ),
+        );
+        return $messages[ $code ] ?? __( 'The interface-string translation could not be completed. No strings were changed.', 'simple-multilang-blocks' );
     }
 
     /** Exports the editable catalogue rather than changing a theme's shipped files. */

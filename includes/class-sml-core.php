@@ -2152,7 +2152,7 @@ final class SML_Core {
         );
         update_option( SML_Translation_Service::OPTION_PROVIDER, isset( $_POST['sml_translation_provider'] ) && in_array( sanitize_key( wp_unslash( $_POST['sml_translation_provider'] ) ), array( 'deepl', 'openai' ), true ) ? sanitize_key( wp_unslash( $_POST['sml_translation_provider'] ) ) : '' );
         $openai_models = SML_Translation_Service::openai_models();
-        $openai_model = isset( $_POST['sml_openai_model'] ) ? sanitize_key( wp_unslash( $_POST['sml_openai_model'] ) ) : SML_Translation_Service::DEFAULT_OPENAI_MODEL;
+        $openai_model = isset( $_POST['sml_openai_model'] ) ? SML_Translation_Service::sanitize_openai_model( wp_unslash( $_POST['sml_openai_model'] ) ) : SML_Translation_Service::DEFAULT_OPENAI_MODEL;
         update_option( SML_Translation_Service::OPTION_OPENAI_MODEL, isset( $openai_models[ $openai_model ] ) ? $openai_model : SML_Translation_Service::DEFAULT_OPENAI_MODEL );
         update_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, isset( $_POST['sml_deepl_endpoint'] ) && 'pro' === sanitize_key( wp_unslash( $_POST['sml_deepl_endpoint'] ) ) ? 'pro' : 'free' );
         update_option( SML_Translation_Service::OPTION_ON_DEMAND_TRANSLATION, ! empty( $_POST['sml_on_demand_translation'] ) );

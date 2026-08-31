@@ -83,11 +83,11 @@ define( 'SML_DEEPL_API_KEY', '...' );
 // or
 define( 'SML_OPENAI_API_KEY', '...' );
 
-// Optional: use gpt-5-mini (recommended) or gpt-5-nano.
-define( 'SML_OPENAI_MODEL', 'gpt-5-mini' );
+// Optional: use gpt-5.4-mini (recommended) or gpt-5.4-nano.
+define( 'SML_OPENAI_MODEL', 'gpt-5.4-mini' );
 ```
 
-The admin settings select the DeepL Free/Pro endpoint and a short OpenAI model list, but never accept or display API secrets. **GPT-5 mini** is the recommended default for written translations; **GPT-5 nano** is available only for simple high-volume work after editorial evaluation. The list can be extended by code through `sml_openai_translation_models`; the settings screen otherwise cannot select an unreviewed model. Before a provider sees content, Simple Multilang protects Gutenberg block comments, HTML markup, URLs and shortcodes with per-request opaque tokens. A response is accepted only when every token comes back exactly once; otherwise no draft is created, the job can retry safely and the editor can use a manual draft. Editor requests enter a small WordPress background queue, which retries a temporary provider failure up to three times. Posts become drafts and taxonomy terms receive a **Requires review** marker; both appear under **Tools → Translation review**. If the provider is disabled, unavailable or returns an invalid response, no duplicate content, term or frontend error is created.
+The admin settings select the DeepL Free/Pro endpoint and a short OpenAI model list, but never accept or display API secrets. **GPT-5.4 mini** is the recommended default for written translations; **GPT-5.4 nano** is available only for simple high-volume work after editorial evaluation. The list can be extended by code through `sml_openai_translation_models`; the settings screen otherwise cannot select an unreviewed model. Before a provider sees content, Simple Multilang protects Gutenberg block comments, HTML markup, URLs, shortcodes and format placeholders with per-request opaque tokens. A response is accepted only when every token comes back exactly once; otherwise no draft is created, the job can retry safely and the editor can use a manual draft. Editor requests enter a small WordPress background queue, which retries a temporary provider failure up to three times. Posts become drafts and taxonomy terms receive a **Requires review** marker; both appear under **Tools → Translation review**. If the provider is disabled, unavailable or returns an invalid response, no duplicate content, term or frontend error is created.
 
 ### Visitor-triggered drafts
 
@@ -100,6 +100,8 @@ When an editor changes the title, excerpt or content of a post/page/product in a
 ## PO exchange and switcher block
 
 **Settings → Interface strings** can export translations for one language as a PO file and import the same PO format later. Use the **All sources** selector beside search to narrow the table to the active theme, one plugin or an imported catalogue; it remains combined with text search, saving and pagination. This only writes the plugin's own interface-string catalogue; it never replaces a theme or plugin's shipped PO/MO files. Entries marked `fuzzy` import as **Requires review**.
+
+An administrator may select a source and target language below the visible table and choose **Auto-translate missing strings (up to 20)**. The action has a WordPress nonce and `manage_options` permission check. It sends only the displayed rows without an existing target translation, never overwrites editor-approved work, and saves a complete returned batch only after validating its protected markup and placeholders. All new values are marked **Requires review**.
 
 The **Language switcher** block is available in the Block and Site editors. It renders the same current-page links, accessibility labels and theme-aware visual style as `[sml_language_switcher]`; no custom theme PHP is required.
 

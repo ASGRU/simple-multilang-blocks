@@ -7,6 +7,8 @@
 .sml-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 18px 0; }
 .sml-toolbar form { margin: 0; }
 .sml-toolbar #sml-string-source-filter { max-width: 270px; }
+.sml-string-auto-translate { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 18px 0; padding: 12px; border: 1px solid #c3c4c7; background: #fff; }
+.sml-string-auto-translate .description { flex-basis: 100%; margin: 0; }
 .sml-strings-table th { min-width: 185px; }
 .sml-strings-table td { min-width: 190px; }
 .sml-strings-table textarea { box-sizing: border-box; width: 100%; resize: vertical; }
