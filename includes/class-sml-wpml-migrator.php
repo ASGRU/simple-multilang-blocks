@@ -21,11 +21,15 @@ final class SML_WPML_Migrator {
             'linked_post_groups'  => 0,
             'unlinked_post_groups'=> 0,
             'special_post_groups' => 0,
+            'ignored_post_rows'   => 0,
+            'conflicting_post_groups' => 0,
             'posts'               => 0,
             'term_groups'         => 0,
             'linked_term_groups'  => 0,
             'unlinked_term_groups'=> 0,
             'menu_groups'         => 0,
+            'ignored_term_rows'   => 0,
+            'conflicting_term_groups' => 0,
             'terms'               => 0,
             'strings'             => 0,
             'string_translations' => 0,
@@ -108,7 +112,7 @@ final class SML_WPML_Migrator {
         $special = self::get_related_post_types();
         $all_post_types = array_values( array_unique( array_merge( $public, $special ) ) );
         if ( ! $all_post_types ) {
-            return array( 'post_groups' => 0, 'linked_post_groups' => 0, 'unlinked_post_groups' => 0, 'special_post_groups' => 0, 'posts' => 0 );
+            return array( 'post_groups' => 0, 'linked_post_groups' => 0, 'unlinked_post_groups' => 0, 'special_post_groups' => 0, 'ignored_post_rows' => 0, 'conflicting_post_groups' => 0, 'posts' => 0 );
         }
 
         $element_types = array();
@@ -116,6 +120,7 @@ final class SML_WPML_Migrator {
             $element_types[] = 'post_' . $post_type;
         }
         $placeholders = implode( ',', array_fill( 0, count( $element_types ), '%s' ) );
+        $raw_rows = self::count_rows_for_element_types( $table, $element_types );
         $sql = "SELECT tr.trid, tr.element_type, tr.element_id, tr.language_code FROM {$table} tr INNER JOIN {$wpdb->posts} p ON p.ID = tr.element_id WHERE tr.element_type IN ({$placeholders}) AND p.post_type IN (" . implode( ',', array_fill( 0, count( $all_post_types ), '%s' ) ) . ')';
         $rows = $wpdb->get_results( $wpdb->prepare( $sql, array_merge( $element_types, $all_post_types ) ), ARRAY_A );
         $groups = self::group_rows( $rows, $languages );
@@ -139,6 +144,8 @@ final class SML_WPML_Migrator {
             'linked_post_groups' => count( $linked_public_groups ),
             'unlinked_post_groups' => count( $public_groups ) - count( $linked_public_groups ),
             'special_post_groups' => count( $special_groups ),
+            'ignored_post_rows' => max( 0, $raw_rows - count( $rows ) ),
+            'conflicting_post_groups' => self::count_conflicting_language_groups( $rows ),
             'posts'          => self::count_grouped_objects( $groups_to_sync ) + $fallback_posts,
             'fallback_posts' => $fallback_posts,
         );
@@ -155,6 +162,7 @@ final class SML_WPML_Migrator {
             $element_types[] = 'tax_' . $taxonomy;
         }
         $placeholders = implode( ',', array_fill( 0, count( $element_types ), '%s' ) );
+        $raw_rows = self::count_rows_for_element_types( $table, $element_types );
         $sql = "SELECT tr.trid, tr.element_type, tt.term_id AS element_id, tr.language_code FROM {$table} tr INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.element_id WHERE tr.element_type IN ({$placeholders})";
         $rows = $wpdb->get_results( $wpdb->prepare( $sql, $element_types ), ARRAY_A );
         $groups = self::group_rows( $rows, $languages );
@@ -176,6 +184,8 @@ final class SML_WPML_Migrator {
             'linked_term_groups' => count( $linked_groups ),
             'unlinked_term_groups' => count( $groups ) - count( $linked_groups ),
             'menu_groups'   => count( $menu_groups ),
+            'ignored_term_rows' => max( 0, $raw_rows - count( $rows ) ),
+            'conflicting_term_groups' => self::count_conflicting_language_groups( $rows ),
             'terms'         => self::count_grouped_objects( $groups ) + $fallback_terms,
             'fallback_terms'=> $fallback_terms,
         );
@@ -256,6 +266,42 @@ final class SML_WPML_Migrator {
             $groups[ $group_key ][ $language ] = $object_id;
         }
         return $groups;
+    }
+
+    /** Counts WPML rows that point at the element types selected for import. */
+    private static function count_rows_for_element_types( $table, $element_types ) {
+        global $wpdb;
+        if ( ! $element_types ) {
+            return 0;
+        }
+        $placeholders = implode( ',', array_fill( 0, count( $element_types ), '%s' ) );
+        return absint( $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE element_type IN ({$placeholders})", $element_types ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    }
+
+    /** Finds live groups that contain two objects with the same WPML language. */
+    private static function count_conflicting_language_groups( $rows ) {
+        $groups = array();
+        foreach ( (array) $rows as $row ) {
+            $element_type = sanitize_key( (string) ( $row['element_type'] ?? '' ) );
+            $trid = absint( $row['trid'] ?? 0 );
+            $language = sanitize_key( (string) ( $row['language_code'] ?? '' ) );
+            if ( ! $element_type || ! $trid || ! $language ) {
+                continue;
+            }
+            $group_key = $element_type . ':' . $trid;
+            if ( ! isset( $groups[ $group_key ] ) ) {
+                $groups[ $group_key ] = array( 'rows' => 0, 'languages' => array() );
+            }
+            ++$groups[ $group_key ]['rows'];
+            $groups[ $group_key ]['languages'][ $language ] = true;
+        }
+        $count = 0;
+        foreach ( $groups as $group ) {
+            if ( $group['rows'] > count( $group['languages'] ) ) {
+                ++$count;
+            }
+        }
+        return $count;
     }
 
     private static function get_routable_post_types() {
