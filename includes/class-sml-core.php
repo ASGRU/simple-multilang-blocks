@@ -16,6 +16,8 @@ final class SML_Core {
 
     private static $instance;
     private static $request_language = null;
+    private static $filtering_home_url = false;
+    private static $filtering_front_page_option = false;
     private static $string_cache = array();
 
     public static function instance() {
@@ -38,6 +40,8 @@ final class SML_Core {
         add_filter( 'post_link', array( $this, 'filter_post_link' ), 20, 2 );
         add_filter( 'page_link', array( $this, 'filter_page_link' ), 20, 3 );
         add_filter( 'post_type_link', array( $this, 'filter_post_type_link' ), 20, 2 );
+        add_filter( 'home_url', array( $this, 'filter_home_url' ), 20, 4 );
+        add_filter( 'option_page_on_front', array( $this, 'filter_page_on_front' ), 20 );
         add_filter( 'term_link', array( $this, 'filter_term_link' ), 20, 3 );
         add_filter( 'wp_nav_menu_args', array( $this, 'map_navigation_menu' ), 20 );
         add_filter( 'wp_nav_menu_objects', array( $this, 'map_navigation_menu_objects' ), 20, 2 );
@@ -335,12 +339,8 @@ final class SML_Core {
         self::$request_language = $language;
 
         if ( ! empty( $wp->query_vars['sml_home'] ) ) {
-            $front_page = (int) get_option( 'page_on_front' );
+            $front_page = self::front_page_for_language( $language, true );
             if ( $front_page ) {
-                $translations = self::get_post_translations( $front_page );
-                if ( ! empty( $translations[ $language ] ) && self::is_public_post( $translations[ $language ] ) ) {
-                    $front_page = (int) $translations[ $language ];
-                }
                 $wp->query_vars['page_id'] = $front_page;
             }
             return;
@@ -503,11 +503,84 @@ final class SML_Core {
     }
 
     public function filter_page_link( $url, $post_id ) {
+        if ( self::is_translated_front_page( $post_id ) ) {
+            return self::language_home_url( self::get_post_language( $post_id ) );
+        }
         return self::add_language_to_url( $url, self::get_post_language( $post_id ) );
     }
 
     public function filter_post_type_link( $url, $post ) {
         return self::add_language_to_url( $url, self::get_post_language( $post->ID ) );
+    }
+
+    /** Keep theme logos and other home links inside the active language root. */
+    public function filter_home_url( $url, $path = '', $scheme = null, $blog_id = null ) {
+        if ( self::$filtering_home_url || is_admin() || wp_doing_ajax() || ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) || '' !== trim( (string) $path, '/' ) ) {
+            return $url;
+        }
+        $language = self::get_current_language();
+        if ( $language === self::get_default_language() ) {
+            return $url;
+        }
+        self::$filtering_home_url = true;
+        $localized = self::add_language_to_url( $url, $language );
+        self::$filtering_home_url = false;
+        return apply_filters( 'sml_language_home_url', $localized, $language, $url );
+    }
+
+    /** Makes WordPress recognise the active language counterpart as is_front_page(). */
+    public function filter_page_on_front( $page_id ) {
+        if ( self::$filtering_front_page_option || is_admin() || wp_doing_ajax() || ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) ) {
+            return $page_id;
+        }
+        $language = self::get_current_language();
+        if ( $language === self::get_default_language() ) {
+            return $page_id;
+        }
+        $translated = self::front_page_for_language( $language, false );
+        return $translated ? $translated : $page_id;
+    }
+
+    /** Returns the public static-front-page counterpart for one language. */
+    private static function front_page_for_language( $language, $fallback_to_source = false ) {
+        if ( 'page' !== get_option( 'show_on_front' ) ) {
+            return 0;
+        }
+        $source_id = self::front_page_source_id();
+        if ( ! $source_id || 'page' !== get_post_type( $source_id ) || ! self::is_public_post( $source_id ) ) {
+            return 0;
+        }
+        $translations = self::get_post_translations( $source_id );
+        $candidate = ! empty( $translations[ $language ] ) ? absint( $translations[ $language ] ) : 0;
+        if ( $candidate && 'page' === get_post_type( $candidate ) && self::is_public_post( $candidate ) ) {
+            return $candidate;
+        }
+        return $fallback_to_source ? $source_id : 0;
+    }
+
+    /** Whether a page is the configured front page or one of its translations. */
+    private static function is_translated_front_page( $post_id ) {
+        $post_id = absint( $post_id );
+        if ( ! $post_id || 'page' !== get_post_type( $post_id ) || 'page' !== get_option( 'show_on_front' ) ) {
+            return false;
+        }
+        $source_id = self::front_page_source_id();
+        if ( $source_id === $post_id ) {
+            return true;
+        }
+        return in_array( $post_id, self::get_post_translations( $source_id ), true );
+    }
+
+    private static function language_home_url( $language ) {
+        return self::add_language_to_url( home_url( '/' ), $language );
+    }
+
+    /** Reads the configured source ID without recursively applying our language filter. */
+    private static function front_page_source_id() {
+        self::$filtering_front_page_option = true;
+        $source_id = absint( get_option( 'page_on_front' ) );
+        self::$filtering_front_page_option = false;
+        return $source_id;
     }
 
     public function filter_term_link( $url, $term, $taxonomy ) {
@@ -875,7 +948,17 @@ final class SML_Core {
         if ( is_admin() || wp_doing_ajax() || ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) ) {
             return;
         }
-        if ( get_query_var( 'sml_language' ) || isset( $_GET['lang'] ) ) {
+        $request_language = get_query_var( 'sml_language' ) ? sanitize_key( get_query_var( 'sml_language' ) ) : ( isset( $_GET['lang'] ) ? sanitize_key( wp_unslash( $_GET['lang'] ) ) : '' );
+        if ( $request_language && is_singular() && self::is_translated_front_page( get_queried_object_id() ) ) {
+            $canonical = self::language_home_url( $request_language );
+            $request_path = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_parse_url( wp_unslash( $_SERVER['REQUEST_URI'] ), PHP_URL_PATH ) : '';
+            $canonical_path = (string) wp_parse_url( $canonical, PHP_URL_PATH );
+            if ( $request_path && untrailingslashit( $request_path ) !== untrailingslashit( $canonical_path ) ) {
+                wp_safe_redirect( $canonical, 301 );
+                exit;
+            }
+        }
+        if ( $request_language ) {
             return;
         }
         if ( is_singular() ) {

@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.6.1
+Stable tag: 1.6.2
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -61,6 +61,10 @@ The switcher can be automatic or shortcode-only, and is also available as a Gute
 **Settings → Simple Multilang → Language switcher → Quick design** configures a header pill, rounded selector or vertical list; regular or compact spacing; flags and names; four floating positions; and optional theme-specific colours. The shortcode and block inherit these settings, so a header needs no custom template code.
 
 Themes can use `sml_language_switcher_design`, `sml_language_switcher_args`, `sml_language_switcher_links`, `sml_language_switcher_languages`, `sml_language_switcher_classes`, `sml_language_switcher_item`, `sml_language_switcher_css_variables`, `sml_language_switcher_html` and `sml_automatic_language_switcher_html` to customise output safely. When WPML is inactive, the plugin also supports the common `wpml_current_language`, `wpml_object_id` and `wpml_active_languages` integration filters plus `icl_get_languages()`.
+
+== Language-specific home pages ==
+
+WordPress has one static homepage setting. Create or link translations of that page through its **Language & translations** panel. A published linked counterpart automatically becomes the homepage at its language root (such as `/ru/`), receives the normal `is_front_page()` theme behaviour, and replaces home links such as the site logo. The old translated-page slug URL redirects to that language root.
 
 == Menus ==
 

@@ -15,7 +15,7 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 
 ## Release process
 
-Push a semantic-version tag such as `v1.6.1`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
+Push a semantic-version tag such as `v1.6.2`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
@@ -57,6 +57,10 @@ add_filter( 'sml_language_switcher_css_variables', function ( $variables ) {
 ```
 
 Further extension points are `sml_language_switcher_args`, `sml_language_switcher_links`, `sml_language_switcher_languages`, `sml_language_switcher_classes`, `sml_language_switcher_item`, `sml_language_switcher_html` and `sml_automatic_language_switcher_html`. When WPML is inactive, the public `wpml_current_language`, `wpml_object_id`, `wpml_active_languages` filters and `icl_get_languages()` are also available for themes that use those common WPML integration points.
+
+## Language-specific home pages
+
+WordPress stores one static homepage in **Settings → Reading**. Create or link its translations in the **Language & translations** panel on that source page; do not configure each translation separately in WordPress. Once published, Simple Multilang serves the linked page from the language root (for example `/ru/`), makes `is_front_page()` true so the theme uses its homepage template, localises ordinary home links such as the site logo, and redirects the translated page's old slug URL to the language root.
 
 ## Menus
 
