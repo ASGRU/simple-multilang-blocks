@@ -659,6 +659,7 @@ final class SML_Translation_Service {
             'sml_openai_connection',
             'sml_openai_response',
             'sml_openai_invalid',
+            'sml_translation_structure',
             'sml_translation_exception',
         ), true );
     }
@@ -821,18 +822,116 @@ final class SML_Translation_Service {
             return new WP_Error( 'sml_provider_unavailable', __( 'The selected translation service is unavailable. No draft was created; you can create a manual draft instead.', 'simple-multilang-blocks' ) );
         }
 
+        // Gutenberg comments, markup, URLs and shortcodes are implementation
+        // data, not prose. Keep them outside the provider's control, then
+        // refuse the response if even one protected fragment is missing or
+        // duplicated. This is intentionally stricter than trying to repair a
+        // possibly corrupted block document after the fact.
+        $protected = self::protect_translatable_fields( $fields );
         if ( 'deepl' === self::provider() ) {
-            return self::translate_with_deepl( $fields, $source_language, $target_language );
+            $translated = self::translate_with_deepl( $protected['fields'], $source_language, $target_language );
+        } elseif ( 'openai' === self::provider() ) {
+            $translated = self::translate_with_openai( $protected['fields'], $source_language, $target_language );
+        } else {
+            return new WP_Error( 'sml_provider_missing', __( 'Select DeepL or OpenAI in Simple Multilang settings.', 'simple-multilang-blocks' ) );
         }
-        if ( 'openai' === self::provider() ) {
-            return self::translate_with_openai( $fields, $source_language, $target_language );
+        if ( is_wp_error( $translated ) ) {
+            return $translated;
         }
-
-        return new WP_Error( 'sml_provider_missing', __( 'Select DeepL or OpenAI in Simple Multilang settings.', 'simple-multilang-blocks' ) );
+        return self::restore_translated_fields( $translated, $protected['tokens'] );
     }
 
     /**
-     * DeepL supports HTML tags, so content and excerpts keep their block markup.
+     * Replaces non-translatable document fragments with one-use opaque tokens.
+     *
+     * @return array{fields: array, tokens: array}
+     */
+    private static function protect_translatable_fields( $fields ) {
+        $protected_fields = array();
+        $tokens_by_field = array();
+        // A per-request marker makes a collision with editorial content
+        // impractical, while remaining plain ASCII for both APIs.
+        $marker = strtoupper( substr( hash( 'sha256', wp_generate_uuid4() . microtime( true ) ), 0, 20 ) );
+        $sequence = 0;
+
+        foreach ( (array) $fields as $field => $value ) {
+            $field = (string) $field;
+            $tokens_by_field[ $field ] = array();
+            $replace = static function ( $matches ) use ( &$tokens_by_field, $field, &$sequence, $marker ) {
+                $sequence++;
+                $token = '__SML_PROTECTED_' . $marker . '_' . $sequence . '__';
+                $tokens_by_field[ $field ][ $token ] = (string) $matches[0];
+                return $token;
+            };
+            $content = (string) $value;
+
+            // Protect comments first: Gutenberg stores every block boundary
+            // and its JSON attributes inside an HTML comment.
+            $content = preg_replace_callback( '~<!--[\s\S]*?-->~', $replace, $content );
+
+            // Plain-text links are common in block content and must not be
+            // localized, shortened or have query arguments altered. Run this
+            // before tags: an href is then protected twice (URL, then tag),
+            // and restored safely in reverse order below.
+            $content = preg_replace_callback( '~(?<![A-Za-z0-9_])(?:https?://|www\.)[^\s<>"\']+~i', $replace, $content );
+            // Attributes can hold URLs, JSON and quote characters, so a
+            // quote-aware matcher is used instead of a simple <...> pattern.
+            $content = preg_replace_callback( '~<(?:"[^"]*"|\'[^\']*\'|[^\'">])*>~s', $replace, $content );
+
+            // First cover registered shortcodes with WordPress' parser, then
+            // cover inactive/unknown shortcode syntax as well. An inactive
+            // shortcode must be preserved just as carefully as an active one.
+            $shortcode_pattern = get_shortcode_regex();
+            if ( $shortcode_pattern ) {
+                $content = preg_replace_callback( '/' . $shortcode_pattern . '/s', $replace, $content );
+            }
+            $content = preg_replace_callback( '~\[(?:/)?[A-Za-z][A-Za-z0-9:_-]*(?:\s+[^\[\]]*)?/?\]~', $replace, $content );
+            $protected_fields[ $field ] = is_string( $content ) ? $content : (string) $value;
+        }
+
+        return array(
+            'fields' => $protected_fields,
+            'tokens' => $tokens_by_field,
+        );
+    }
+
+    /**
+     * Restores protected fragments only when every token survived precisely
+     * once. A malformed provider response never becomes a WordPress draft.
+     *
+     * @return array|WP_Error
+     */
+    private static function restore_translated_fields( $translated, $tokens_by_field ) {
+        if ( ! is_array( $translated ) ) {
+            return new WP_Error( 'sml_translation_structure', __( 'The translation response could not preserve the page structure. No draft was created; please retry or create a manual draft.', 'simple-multilang-blocks' ) );
+        }
+
+        foreach ( (array) $tokens_by_field as $field => $tokens ) {
+            if ( ! array_key_exists( $field, $translated ) || ! is_scalar( $translated[ $field ] ) ) {
+                return new WP_Error( 'sml_translation_structure', __( 'The translation response could not preserve the page structure. No draft was created; please retry or create a manual draft.', 'simple-multilang-blocks' ) );
+            }
+            $content = (string) $translated[ $field ];
+            // Later tokens may contain earlier ones (a URL in an href, for
+            // example), so unwrap them like nested markup: outermost first.
+            foreach ( array_reverse( (array) $tokens, true ) as $token => $original ) {
+                if ( 1 !== substr_count( $content, $token ) ) {
+                    return new WP_Error( 'sml_translation_structure', __( 'The translation response could not preserve the page structure. No draft was created; please retry or create a manual draft.', 'simple-multilang-blocks' ) );
+                }
+                $content = str_replace( $token, $original, $content );
+            }
+            // A changed token (for example, one with a changed sequence) is
+            // also unsafe. Do not leave it in public-facing copy.
+            if ( false !== strpos( $content, '__SML_PROTECTED_' ) ) {
+                return new WP_Error( 'sml_translation_structure', __( 'The translation response could not preserve the page structure. No draft was created; please retry or create a manual draft.', 'simple-multilang-blocks' ) );
+            }
+            $translated[ $field ] = $content;
+        }
+
+        return $translated;
+    }
+
+    /**
+     * DeepL receives prose only; protected tokens keep document structure intact.
      *
      * @return array|WP_Error
      */
@@ -891,7 +990,7 @@ final class SML_Translation_Service {
         }
 
         $instructions = sprintf(
-            'Translate the supplied WordPress content from %1$s to %2$s. Preserve HTML tags, Gutenberg block comments, placeholders, URLs, shortcodes, product codes and line breaks. Do not add commentary. Return one json object with exactly the keys title, excerpt and content; use empty strings for empty source fields.',
+            'Translate the supplied WordPress content from %1$s to %2$s. Strings matching __SML_PROTECTED_[A-F0-9]+_[0-9]+__ are opaque structural tokens: copy every one exactly once, unchanged, in its original position. Never translate, remove, duplicate, reorder or create such tokens. They represent Gutenberg block comments, HTML, URLs, shortcodes or other protected data. Translate only the remaining human-readable text. Do not add commentary. Return one json object with exactly the keys title, excerpt and content; use empty strings for empty source fields.',
             $languages[ $source_language ]['name'],
             $languages[ $target_language ]['name']
         );

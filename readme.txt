@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.8.2
+Stable tag: 1.9.0
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -19,6 +19,7 @@ A lightweight multilingual layer for block-based WordPress sites.
 * Separate safe WPML String Translation import that leaves content, menus, URL routing and language settings unchanged.
 * Public-interface string screen for the active theme and selected plugins.
 * Manual draft creation and editor-triggered DeepL/OpenAI translations through a bounded background queue, always marked for review.
+* Gutenberg-safe automatic translations: block comments, markup, URLs and shortcodes are protected and verified before a draft can be created.
 * Responses API-compatible OpenAI translation requests and a curated GPT-5 mini/nano model selector.
 * Translation Review workspace with queue status and safe retry for a failed provider request.
 * Source-change tracking marks linked post translations as outdated without overwriting or publishing content.
@@ -50,7 +51,7 @@ or
 
 The model selector offers a reviewed, economical list: **GPT-5 mini** (recommended for written translation) and **GPT-5 nano** (simple high-volume text after editorial evaluation). A `SML_OPENAI_MODEL` value in `wp-config.php` can override the selector, but the plugin accepts only these reviewed choices unless a developer extends `sml_openai_translation_models`.
 
-The plugin never sends content to a provider until an editor queues a translation. The request runs through a small WordPress background queue and retries a temporary provider problem up to three times. Successful post results are linked drafts; taxonomy terms use the same queue and a review marker. Neither is published automatically. Failed jobs remain visible in **Tools → Translation review**. If a provider is unavailable, no duplicate content, term or frontend error is shown.
+The plugin never sends content to a provider until an editor queues a translation. Before an API request it replaces Gutenberg block comments, HTML markup, URLs and shortcodes with one-use opaque tokens. The response is accepted only if each token returns unchanged exactly once; otherwise no draft is created and the job can retry safely. The request runs through a small WordPress background queue and retries a temporary provider problem up to three times. Successful post results are linked drafts; taxonomy terms use the same queue and a review marker. Neither is published automatically. Failed jobs remain visible in **Tools → Translation review**. If a provider is unavailable, no duplicate content, term or frontend error is shown.
 
 == Visitor-triggered drafts ==
 
