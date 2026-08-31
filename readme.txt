@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.8.1
+Stable tag: 1.8.2
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -16,6 +16,7 @@ A lightweight multilingual layer for block-based WordPress sites.
 * Per-theme switcher design controls: header pill, rounded selector or vertical list; spacing, flags/names, floating position and optional colours.
 * Shared and language-specific classic menus, plus Site Editor Navigation block links, follow the active language.
 * WPML migration for content relationships and String Translation entries.
+* Separate safe WPML String Translation import that leaves content, menus, URL routing and language settings unchanged.
 * Public-interface string screen for the active theme and selected plugins.
 * Manual draft creation and editor-triggered DeepL/OpenAI translations through a bounded background queue, always marked for review.
 * Responses API-compatible OpenAI translation requests and a curated GPT-5 mini/nano model selector.
@@ -84,3 +85,5 @@ GPL-2.0-or-later. This plugin is free software: you may use, study, modify and r
 Take a database backup. In the plugin settings run **Migration preflight** first, then use **Import WPML data**, or run `wp sml migrate_wpml --dry-run` followed by `wp sml migrate_wpml --yes`.
 
 The importer does not delete WPML tables, settings or plugin files. Its preflight separately reports ignored WPML rows whose referenced objects no longer exist and groups with duplicate language assignments. It recreates relationships only where WPML has a real multi-language translation group; standalone records remain language-labelled and are never guessed into a relationship. When no verified linked groups are found, importing can preserve language labels and String Translation values but cannot recreate missing content links. Hierarchical page and term parents are reconciled only with their linked counterpart, preventing mixed-language URLs. Verify representative pages, product categories and translated interface strings before removing WPML from disk.
+
+When the preflight has no valid content relationships, use **Import WPML interface strings only** instead. It writes only Simple Multilang’s string catalogue; posts, terms, menus, URLs and language settings remain untouched. The CLI equivalent is `wp sml migrate_wpml --strings-only --yes` after a backup.

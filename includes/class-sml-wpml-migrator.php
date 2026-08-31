@@ -58,6 +58,31 @@ final class SML_WPML_Migrator {
         return $result;
     }
 
+    /**
+     * Imports only WPML String Translation records. This intentionally leaves
+     * language settings, posts, terms, menus and every URL relationship alone.
+     */
+    public static function run_strings_only( $dry_run = true ) {
+        global $wpdb;
+
+        $languages_table = $wpdb->prefix . 'icl_languages';
+        $strings_table = $wpdb->prefix . 'icl_strings';
+        $string_translations_table = $wpdb->prefix . 'icl_string_translations';
+        if ( ! self::table_exists( $languages_table ) || ! self::table_exists( $strings_table ) || ! self::table_exists( $string_translations_table ) ) {
+            throw new RuntimeException( 'WPML String Translation tables were not found.' );
+        }
+
+        // Read the active WPML languages only to validate string locales. Do
+        // not write language configuration in this deliberately narrow mode.
+        $languages = self::migrate_languages( $languages_table, get_option( 'icl_sitepress_settings', array() ), true );
+        if ( ! $languages ) {
+            throw new RuntimeException( 'WPML has no active languages to import.' );
+        }
+        $result = self::migrate_strings( $strings_table, $string_translations_table, array_keys( $languages ), self::get_default_language( $languages ), $dry_run );
+        $result['languages'] = count( $languages );
+        return $result;
+    }
+
     private static function get_default_language( $languages ) {
         foreach ( $languages as $slug => $language ) {
             if ( ! empty( $language['is_default'] ) ) {

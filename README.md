@@ -15,7 +15,7 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 
 ## Release process
 
-Push a semantic-version tag such as `v1.8.1`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
+Push a semantic-version tag such as `v1.8.2`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
@@ -29,6 +29,8 @@ Simple Multilang Blocks is free software, released under the GNU General Public 
 4. Read the preflight warnings before importing: it reports WPML rows whose referenced objects no longer exist and groups with duplicate language assignments. If it reports no linked groups, the import cannot reconstruct content relationships; it can only preserve language labels and String Translation values.
 5. Verify pages, WooCommerce product/category archives, navigation and translated interface strings. The importer recreates relationships only where WPML has a multi-language translation group; standalone source records keep their language label and are not guessed into a relationship.
 6. Deactivate WPML only after verification. The importer never deletes WPML data.
+
+If preflight reports no valid linked content groups, use **Import WPML interface strings only** instead. This narrowly writes only Simple Multilang’s editable string catalogue; it does not change posts, terms, menus, URLs or language settings. The equivalent command is `wp sml migrate_wpml --strings-only --yes` after a backup.
 
 ## Editing interface strings
 

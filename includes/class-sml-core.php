@@ -76,6 +76,7 @@ final class SML_Core {
         add_action( 'admin_post_sml_scan_menu_strings', array( $this, 'scan_menu_strings' ) );
         add_action( 'admin_post_sml_preview_wpml', array( $this, 'preview_wpml' ) );
         add_action( 'admin_post_sml_import_wpml', array( $this, 'import_wpml' ) );
+        add_action( 'admin_post_sml_import_wpml_strings', array( $this, 'import_wpml_strings' ) );
         add_action( 'admin_post_sml_create_term_translation', array( $this, 'create_term_translation' ) );
         add_action( 'admin_post_sml_translate_term', array( $this, 'queue_term_translation' ) );
         add_action( 'admin_post_sml_mark_term_translation_verified', array( $this, 'mark_term_translation_verified' ) );
@@ -1998,6 +1999,7 @@ final class SML_Core {
         <div class="wrap sml-admin-wrap"><h1><?php esc_html_e( 'Simple Multilang settings', 'simple-multilang-blocks' ); ?></h1>
         <?php if ( isset( $_GET['updated'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Settings saved. Rewrite rules were refreshed.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
         <?php if ( isset( $_GET['imported'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'WPML data was imported. Verify representative pages, categories and strings before uninstalling WPML files.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
+        <?php if ( isset( $_GET['strings_imported'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'WPML interface strings were imported. Content, language relationships and URLs were not changed.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
         <p><a class="button" href="<?php echo esc_url( admin_url( 'options-general.php?page=sml-theme-strings' ) ); ?>"><?php esc_html_e( 'Translate interface strings', 'simple-multilang-blocks' ); ?></a></p>
         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_save_settings' ); ?><input type="hidden" name="action" value="sml_save_settings">
         <h2><?php esc_html_e( 'Languages', 'simple-multilang-blocks' ); ?></h2><p class="description"><?php esc_html_e( 'Default-language URLs stay at the site root. Flags can be emoji or a URL to an image.', 'simple-multilang-blocks' ); ?></p>
@@ -2081,6 +2083,7 @@ final class SML_Core {
                 <li><?php echo esc_html( sprintf( __( 'Interface strings: %1$d (%2$d translations)', 'simple-multilang-blocks' ), absint( $preview['strings'] ?? 0 ), absint( $preview['string_translations'] ?? 0 ) ) ); ?></li>
             </ul><p class="description"><?php esc_html_e( 'Single-language groups receive their language label but are never guessed into a translation relationship.', 'simple-multilang-blocks' ); ?></p><?php if ( empty( $preview['linked_post_groups'] ) && empty( $preview['linked_term_groups'] ) && ( ! empty( $preview['post_groups'] ) || ! empty( $preview['term_groups'] ) ) ) : ?><p><strong><?php esc_html_e( 'No verified multilingual relationships were found. Importing now can preserve language labels and interface strings, but cannot recreate missing content or term links.', 'simple-multilang-blocks' ); ?></strong></p><?php endif; ?></div>
         <?php endif; ?>
+        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_import_wpml_strings' ); ?><input type="hidden" name="action" value="sml_import_wpml_strings"><p class="description"><?php esc_html_e( 'Safe alternative: import only WPML String Translation values. This does not modify content, language settings, menus, URLs or relationships.', 'simple-multilang-blocks' ); ?></p><label><input required type="checkbox" name="sml_import_confirm" value="1"> <?php esc_html_e( 'I reviewed the preflight report and want to import interface strings only.', 'simple-multilang-blocks' ); ?></label><p><button class="button button-secondary" <?php disabled( ! is_array( $wpml_preview ) || empty( $wpml_preview['result'] ) || empty( $wpml_preview['result']['strings'] ) ); ?>> <?php esc_html_e( 'Import WPML interface strings only', 'simple-multilang-blocks' ); ?></button></p></form>
         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_import_wpml' ); ?><input type="hidden" name="action" value="sml_import_wpml"><label><input required type="checkbox" name="sml_import_confirm" value="1"> <?php esc_html_e( 'I took a database backup and reviewed the preflight report.', 'simple-multilang-blocks' ); ?></label><p><button class="button" <?php disabled( ! is_array( $wpml_preview ) || empty( $wpml_preview['result'] ) ); ?>> <?php esc_html_e( 'Import WPML data', 'simple-multilang-blocks' ); ?></button></p></form></div>
         <?php
     }
@@ -2182,6 +2185,31 @@ final class SML_Core {
         self::schedule_rewrite_flush();
         delete_transient( $this->wpml_preview_key() );
         wp_safe_redirect( add_query_arg( 'imported', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
+        exit;
+    }
+
+    /** Imports only the WPML String Translation catalogue after preflight. */
+    public function import_wpml_strings() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You are not allowed to import translations.', 'simple-multilang-blocks' ) );
+        }
+        check_admin_referer( 'sml_import_wpml_strings' );
+        if ( empty( $_POST['sml_import_confirm'] ) ) {
+            wp_die( esc_html__( 'Confirm the import after reviewing the preflight report.', 'simple-multilang-blocks' ) );
+        }
+        $preview = get_transient( $this->wpml_preview_key() );
+        if ( ! is_array( $preview ) || empty( $preview['result']['strings'] ) ) {
+            wp_die( esc_html__( 'Run the WPML migration preflight and review its string counts before importing.', 'simple-multilang-blocks' ) );
+        }
+        try {
+            SML_WPML_Migrator::run_strings_only( false );
+        } catch ( Throwable $error ) {
+            set_transient( $this->wpml_preview_key(), array( 'error' => __( 'WPML interface strings could not be imported. No content or URL relationships were changed.', 'simple-multilang-blocks' ) ), 10 * MINUTE_IN_SECONDS );
+            wp_safe_redirect( add_query_arg( 'wpml_import_failed', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
+            exit;
+        }
+        delete_transient( $this->wpml_preview_key() );
+        wp_safe_redirect( add_query_arg( 'strings_imported', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
         exit;
     }
 
