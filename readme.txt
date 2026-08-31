@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.5.0
+Stable tag: 1.6.0
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -13,6 +13,7 @@ A lightweight multilingual layer for block-based WordPress sites.
 
 * Post, page, WooCommerce product and taxonomy translation relationships.
 * Language-prefixed URLs, a styled automatic/shortcode language switcher and hreflang tags.
+* Per-theme switcher design controls: header pill, rounded selector or vertical list; spacing, flags/names, floating position and optional colours.
 * Shared and language-specific classic menus, plus Site Editor Navigation block links, follow the active language.
 * WPML migration for content relationships and String Translation entries.
 * Public-interface string screen for the active theme and selected plugins.
@@ -55,6 +56,10 @@ Open **Settings → Interface strings** to edit strings from the active theme an
 == Language switcher ==
 
 The switcher can be automatic or shortcode-only, and is also available as a Gutenberg block. Its appearance is stored per active theme: theme colours, light, dark or minimal. Add a theme-specific CSS class when a project needs its own styling layer.
+
+**Settings → Simple Multilang → Language switcher → Quick design** configures a header pill, rounded selector or vertical list; regular or compact spacing; flags and names; four floating positions; and optional theme-specific colours. The shortcode and block inherit these settings, so a header needs no custom template code.
+
+Themes can use `sml_language_switcher_design`, `sml_language_switcher_args`, `sml_language_switcher_links`, `sml_language_switcher_languages`, `sml_language_switcher_classes`, `sml_language_switcher_item`, `sml_language_switcher_css_variables`, `sml_language_switcher_html` and `sml_automatic_language_switcher_html` to customise output safely. When WPML is inactive, the plugin also supports the common `wpml_current_language`, `wpml_object_id` and `wpml_active_languages` integration filters plus `icl_get_languages()`.
 
 == Menus ==
 

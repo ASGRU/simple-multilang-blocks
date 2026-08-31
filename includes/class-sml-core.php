@@ -10,6 +10,7 @@ final class SML_Core {
     const OPTION_SWITCHER_PLACEMENT = 'sml_switcher_placement';
     const OPTION_SWITCHER_APPEARANCE = 'sml_switcher_appearance';
     const OPTION_SWITCHER_CLASS = 'sml_switcher_class';
+    const OPTION_SWITCHER_DESIGN = 'sml_switcher_design';
     const OPTION_DB_VERSION = 'sml_db_version';
     const DB_VERSION = '1.3.0';
 
@@ -55,6 +56,7 @@ final class SML_Core {
         if ( ! defined( 'ICL_SITEPRESS_VERSION' ) && ! class_exists( 'SitePress' ) ) {
             add_filter( 'wpml_current_language', array( $this, 'compat_current_language' ) );
             add_filter( 'wpml_object_id', array( $this, 'compat_object_id' ), 10, 5 );
+            add_filter( 'wpml_active_languages', array( $this, 'compat_active_languages' ), 10, 2 );
         }
 
         add_action( 'add_meta_boxes', array( $this, 'register_post_meta_boxes' ) );
@@ -181,6 +183,39 @@ final class SML_Core {
     public static function get_switcher_custom_class() {
         $classes = (array) get_option( self::OPTION_SWITCHER_CLASS, array() );
         return isset( $classes[ get_stylesheet() ] ) ? sanitize_html_class( $classes[ get_stylesheet() ] ) : '';
+    }
+
+    /** Per-theme presentation settings. URLs and language relationships stay separate. */
+    public static function get_switcher_design() {
+        $defaults = array(
+            'style'           => 'pills',
+            'density'         => 'regular',
+            'position'        => 'top-right',
+            'show_name'       => true,
+            'show_flag'       => true,
+            'surface'         => '',
+            'foreground'      => '',
+            'accent'          => '',
+            'active_foreground' => '',
+            'border'          => '',
+        );
+        $all = (array) get_option( self::OPTION_SWITCHER_DESIGN, array() );
+        $saved = isset( $all[ get_stylesheet() ] ) && is_array( $all[ get_stylesheet() ] ) ? $all[ get_stylesheet() ] : array();
+        $design = wp_parse_args( $saved, $defaults );
+        $design = apply_filters( 'sml_language_switcher_design', $design, get_stylesheet() );
+        $design = is_array( $design ) ? wp_parse_args( $design, $defaults ) : $defaults;
+        $style = sanitize_key( (string) $design['style'] );
+        $density = sanitize_key( (string) $design['density'] );
+        $position = sanitize_key( (string) $design['position'] );
+        $design['style'] = in_array( $style, array( 'pills', 'dropdown', 'list' ), true ) ? $style : $defaults['style'];
+        $design['density'] = in_array( $density, array( 'regular', 'compact' ), true ) ? $density : $defaults['density'];
+        $design['position'] = in_array( $position, array( 'top-right', 'top-left', 'bottom-right', 'bottom-left' ), true ) ? $position : $defaults['position'];
+        $design['show_name'] = ! empty( $design['show_name'] );
+        $design['show_flag'] = ! empty( $design['show_flag'] );
+        foreach ( array( 'surface', 'foreground', 'accent', 'active_foreground', 'border' ) as $color ) {
+            $design[ $color ] = isset( $design[ $color ] ) && is_string( $design[ $color ] ) ? ( sanitize_hex_color( $design[ $color ] ) ?: '' ) : '';
+        }
+        return $design;
     }
 
     public static function get_default_language() {
@@ -903,11 +938,104 @@ final class SML_Core {
     }
 
     public function language_switcher_shortcode( $atts ) {
-        $atts = shortcode_atts( array( 'class' => '', 'style' => 'dropdown', 'appearance' => '', 'show_name' => '1' ), $atts, 'sml_language_switcher' );
-        $translations = array();
+        $defaults = array( 'class' => '', 'style' => '', 'appearance' => '', 'show_name' => '', 'show_flag' => '', 'density' => '' );
+        $atts = shortcode_atts( $defaults, $atts, 'sml_language_switcher' );
         $current = self::get_current_language();
-        $links = array();
+        $context = array(
+            'current_language' => $current,
+            'queried_object_id' => absint( get_queried_object_id() ),
+            'is_singular'      => is_singular(),
+            'is_taxonomy'      => is_tax() || is_category() || is_tag(),
+        );
+        $filtered_atts = apply_filters( 'sml_language_switcher_args', $atts, $context );
+        $atts = is_array( $filtered_atts ) ? wp_parse_args( $filtered_atts, $defaults ) : $atts;
+        $design = self::get_switcher_design();
+        $style = '' === (string) $atts['style'] ? $design['style'] : sanitize_key( $atts['style'] );
+        $style = in_array( $style, array( 'dropdown', 'pills', 'list' ), true ) ? $style : $design['style'];
+        $appearance = '' === (string) $atts['appearance'] ? self::get_switcher_appearance() : sanitize_key( $atts['appearance'] );
+        $appearance = in_array( $appearance, array( 'theme', 'light', 'dark', 'minimal' ), true ) ? $appearance : self::get_switcher_appearance();
+        $density = '' === (string) $atts['density'] ? $design['density'] : sanitize_key( $atts['density'] );
+        $density = in_array( $density, array( 'regular', 'compact' ), true ) ? $density : $design['density'];
+        $show_name = '' === (string) $atts['show_name'] ? $design['show_name'] : '0' !== (string) $atts['show_name'];
+        $show_flag = '' === (string) $atts['show_flag'] ? $design['show_flag'] : '0' !== (string) $atts['show_flag'];
+        $links = apply_filters( 'sml_language_switcher_links', $this->language_switcher_links(), $context, $atts );
 
+        if ( ! is_array( $links ) || ! $links ) {
+            return '';
+        }
+
+        $languages = apply_filters( 'sml_language_switcher_languages', self::get_languages(), $context, $atts );
+        $classes = apply_filters(
+            'sml_language_switcher_classes',
+            array( 'sml-language-switcher', 'sml-language-switcher--' . $style, 'sml-language-switcher--' . $density, self::get_switcher_custom_class(), sanitize_html_class( $atts['class'] ) ),
+            $atts,
+            $context
+        );
+        $classes = array_values( array_filter( array_map( 'sanitize_html_class', (array) $classes ) ) );
+        $css_variables = self::switcher_css_variables( $design, $atts, $context );
+        $inline_style = '';
+        foreach ( $css_variables as $name => $color ) {
+            if ( ! is_string( $name ) || ! is_string( $color ) || 0 !== strpos( $name, '--sml-' ) ) {
+                continue;
+            }
+            $color = sanitize_hex_color( $color );
+            if ( $color ) {
+                $inline_style .= $name . ':' . $color . ';';
+            }
+        }
+        $html = '<nav class="' . esc_attr( implode( ' ', $classes ) ) . '" data-sml-appearance="' . esc_attr( $appearance ) . '" data-sml-density="' . esc_attr( $density ) . '"' . ( $inline_style ? ' style="' . esc_attr( $inline_style ) . '"' : '' ) . ' aria-label="' . esc_attr__( 'Language selector', 'simple-multilang-blocks' ) . '"><ul>';
+        $items = array();
+        foreach ( (array) $languages as $language => $data ) {
+            $language = sanitize_key( (string) $language );
+            if ( ! isset( self::get_languages()[ $language ], $links[ $language ] ) || ! is_array( $data ) ) {
+                continue;
+            }
+            $item = apply_filters(
+                'sml_language_switcher_item',
+                array(
+                    'language'   => $language,
+                    'name'       => isset( $data['name'] ) ? sanitize_text_field( $data['name'] ) : self::get_languages()[ $language ]['name'],
+                    'flag'       => isset( $data['flag'] ) ? sanitize_text_field( $data['flag'] ) : self::get_language_flag( $language ),
+                    'url'        => $links[ $language ],
+                    'is_current' => $language === $current,
+                ),
+                $context,
+                $atts
+            );
+            if ( ! is_array( $item ) || empty( $item['url'] ) || ! is_string( $item['url'] ) ) {
+                continue;
+            }
+            $url = esc_url_raw( $item['url'] );
+            if ( ! $url ) {
+                continue;
+            }
+            $item['name'] = isset( $item['name'] ) && is_scalar( $item['name'] ) ? sanitize_text_field( (string) $item['name'] ) : '';
+            $item['flag'] = isset( $item['flag'] ) && is_scalar( $item['flag'] ) ? sanitize_text_field( (string) $item['flag'] ) : '';
+            $item['is_current'] = ! empty( $item['is_current'] );
+            $label = '';
+            if ( $show_flag && '' !== $item['flag'] ) {
+                $label .= '<span class="sml-language-switcher__flag" aria-hidden="true">' . self::get_language_flag_html( array( 'flag' => $item['flag'], 'slug' => $language ) ) . '</span>';
+            }
+            if ( $show_name && '' !== $item['name'] ) {
+                $label .= '<span class="sml-language-switcher__name">' . esc_html( $item['name'] ) . '</span>';
+            }
+            if ( '' === $label ) {
+                $label = '<span class="screen-reader-text">' . esc_html( self::get_languages()[ $language ]['name'] ) . '</span>';
+            }
+            $code = self::get_languages()[ $language ]['code'];
+            $html .= sprintf( '<li%s><a href="%s" hreflang="%s" lang="%s" aria-current="%s">%s</a></li>', $item['is_current'] ? ' class="is-active"' : '', esc_url( $url ), esc_attr( $code ), esc_attr( $code ), $item['is_current'] ? 'true' : 'false', $label );
+            $items[] = $item;
+        }
+        if ( ! $items ) {
+            return '';
+        }
+        $html .= '</ul></nav>';
+        $html = apply_filters( 'sml_language_switcher_html', $html, $items, $atts, $context );
+        return is_string( $html ) ? $html : '';
+    }
+
+    private function language_switcher_links() {
+        $links = array();
         if ( is_singular() ) {
             $post_id = get_queried_object_id();
             $translations = self::get_post_translations( $post_id );
@@ -930,27 +1058,18 @@ final class SML_Core {
                 $links[ $language ] = self::add_language_to_url( home_url( '/' ), $language );
             }
         }
+        return $links;
+    }
 
-        if ( ! $links ) {
-            return '';
-        }
-
-        $style = in_array( $atts['style'], array( 'dropdown', 'pills', 'list' ), true ) ? $atts['style'] : 'dropdown';
-        $appearance = in_array( $atts['appearance'], array( 'theme', 'light', 'dark', 'minimal' ), true ) ? $atts['appearance'] : self::get_switcher_appearance();
-        $class = trim( 'sml-language-switcher sml-language-switcher--' . $style . ' ' . self::get_switcher_custom_class() . ' ' . sanitize_html_class( $atts['class'] ) );
-        $html = '<nav class="' . esc_attr( $class ) . '" data-sml-appearance="' . esc_attr( $appearance ) . '" aria-label="' . esc_attr__( 'Language selector', 'simple-multilang-blocks' ) . '"><ul>';
-        foreach ( self::get_languages() as $language => $data ) {
-            if ( empty( $links[ $language ] ) ) {
-                continue;
-            }
-            $active = $language === $current ? ' class="is-active"' : '';
-            $label = '<span class="sml-language-switcher__flag" aria-hidden="true">' . self::get_language_flag_html( $data ) . '</span>';
-            if ( '0' !== (string) $atts['show_name'] ) {
-                $label .= '<span class="sml-language-switcher__name">' . esc_html( $data['name'] ) . '</span>';
-            }
-            $html .= sprintf( '<li%s><a href="%s" hreflang="%s" lang="%s" aria-current="%s">%s</a></li>', $active, esc_url( $links[ $language ] ), esc_attr( $data['code'] ), esc_attr( $data['code'] ), $language === $current ? 'true' : 'false', $label );
-        }
-        return $html . '</ul></nav>';
+    private static function switcher_css_variables( $design, $atts, $context ) {
+        $variables = array(
+            '--sml-surface'    => $design['surface'],
+            '--sml-foreground' => $design['foreground'],
+            '--sml-accent'     => $design['accent'],
+            '--sml-active-foreground' => $design['active_foreground'],
+            '--sml-border'     => $design['border'],
+        );
+        return (array) apply_filters( 'sml_language_switcher_css_variables', $variables, $atts, $context );
     }
 
     public function enqueue_frontend_assets() {
@@ -973,9 +1092,11 @@ final class SML_Core {
         $attributes = is_array( $attributes ) ? $attributes : array();
         return $this->language_switcher_shortcode(
             array(
-                'style'      => isset( $attributes['style'] ) ? sanitize_key( $attributes['style'] ) : 'dropdown',
+                'style'      => ! empty( $attributes['style'] ) ? sanitize_key( $attributes['style'] ) : '',
                 'appearance' => isset( $attributes['appearance'] ) ? sanitize_key( $attributes['appearance'] ) : '',
-                'show_name'  => empty( $attributes['showName'] ) ? '0' : '1',
+                'show_name'  => array_key_exists( 'showName', $attributes ) ? ( empty( $attributes['showName'] ) ? '0' : '1' ) : '',
+                'show_flag'  => array_key_exists( 'showFlag', $attributes ) ? ( empty( $attributes['showFlag'] ) ? '0' : '1' ) : '',
+                'density'    => isset( $attributes['density'] ) ? sanitize_key( $attributes['density'] ) : '',
                 'class'      => isset( $attributes['className'] ) ? sanitize_html_class( $attributes['className'] ) : '',
             )
         );
@@ -985,18 +1106,59 @@ final class SML_Core {
         if ( 'automatic' !== get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) || is_admin() ) {
             return;
         }
-        echo '<div class="sml-switcher-slot">' . do_shortcode( '[sml_language_switcher style="dropdown"]' ) . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        echo $this->automatic_switcher_markup(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
     }
 
     public function render_automatic_switcher_fallback() {
         if ( 'automatic' !== get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) || did_action( 'wp_body_open' ) || is_admin() ) {
             return;
         }
-        echo '<div class="sml-switcher-slot">' . do_shortcode( '[sml_language_switcher style="dropdown"]' ) . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        echo $this->automatic_switcher_markup(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    }
+
+    private function automatic_switcher_markup() {
+        $design = self::get_switcher_design();
+        $switcher = $this->language_switcher_shortcode(
+            array(
+                'style'      => $design['style'],
+                'show_name'  => $design['show_name'] ? '1' : '0',
+                'show_flag'  => $design['show_flag'] ? '1' : '0',
+                'density'    => $design['density'],
+            )
+        );
+        if ( ! $switcher ) {
+            return '';
+        }
+        $markup = '<div class="sml-switcher-slot sml-switcher-slot--' . esc_attr( $design['position'] ) . '">' . $switcher . '</div>';
+        $markup = apply_filters( 'sml_automatic_language_switcher_html', $markup, $design );
+        return is_string( $markup ) ? $markup : '';
     }
 
     public function compat_current_language( $value = null ) {
         return self::get_current_language();
+    }
+
+    /** Compatibility data for themes that use WPML's public language-list filter. */
+    public function compat_active_languages( $value = null, $args = '' ) {
+        $current = self::get_current_language();
+        $links = $this->language_switcher_links();
+        $result = array();
+        foreach ( self::get_languages() as $language => $data ) {
+            if ( empty( $links[ $language ] ) ) {
+                continue;
+            }
+            $result[ $language ] = array(
+                'code'            => $language,
+                'id'              => $language,
+                'active'          => $language === $current ? 1 : 0,
+                'default_locale'  => $data['code'],
+                'native_name'     => $data['name'],
+                'translated_name' => $data['name'],
+                'url'             => $links[ $language ],
+                'country_flag_url'=> wp_http_validate_url( self::get_language_flag( $data ) ) ? self::get_language_flag( $data ) : '',
+            );
+        }
+        return apply_filters( 'sml_wpml_active_languages', $result, $args );
     }
 
     public function compat_object_id( $object_id, $object_type = '', $return_original_if_missing = true, $language_code = null ) {
@@ -1651,6 +1813,8 @@ final class SML_Core {
         $plugin_domains = SML_Theme_Strings::available_plugin_domains();
         $selected_plugin_domains = SML_Theme_Strings::selected_plugin_domains();
         $wpml_preview = get_transient( $this->wpml_preview_key() );
+        $switcher_design = self::get_switcher_design();
+        $switcher_has_custom_colors = (bool) array_filter( array_intersect_key( $switcher_design, array_flip( array( 'surface', 'foreground', 'accent', 'active_foreground', 'border' ) ) ) );
         ?>
         <div class="wrap sml-admin-wrap"><h1><?php esc_html_e( 'Simple Multilang settings', 'simple-multilang-blocks' ); ?></h1>
         <?php if ( isset( $_GET['updated'] ) ) : ?><div class="notice notice-success"><p><?php esc_html_e( 'Settings saved. Rewrite rules were refreshed.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
@@ -1682,7 +1846,15 @@ final class SML_Core {
         <h3><?php esc_html_e( 'Plugin interface sources', 'simple-multilang-blocks' ); ?></h3><p class="description"><?php esc_html_e( 'Choose only plugins whose public-facing labels you want to translate. Known strings can be scanned from POT files; strings without a POT file are added when a visitor opens the relevant public page.', 'simple-multilang-blocks' ); ?></p><div class="sml-checkbox-grid">
         <?php if ( $plugin_domains ) : foreach ( $plugin_domains as $domain => $plugin ) : ?><label><input type="checkbox" name="sml_interface_plugin_domains[]" value="<?php echo esc_attr( $domain ); ?>" <?php checked( in_array( $domain, $selected_plugin_domains, true ) ); ?>> <?php echo esc_html( $plugin['name'] . ' (' . $domain . ')' ); ?></label><?php endforeach; else : ?><span class="description"><?php esc_html_e( 'No eligible active plugins were found.', 'simple-multilang-blocks' ); ?></span><?php endif; ?>
         </div>
-        <h2><?php esc_html_e( 'Language switcher', 'simple-multilang-blocks' ); ?></h2><p><label><input type="radio" name="sml_switcher_placement" value="automatic" <?php checked( 'automatic', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Show a floating switcher automatically', 'simple-multilang-blocks' ); ?></label><br><label><input type="radio" name="sml_switcher_placement" value="shortcode" <?php checked( 'shortcode', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Use shortcode only', 'simple-multilang-blocks' ); ?></label></p><p><label><?php esc_html_e( 'Appearance for this theme', 'simple-multilang-blocks' ); ?> <select name="sml_switcher_appearance"><option value="theme" <?php selected( 'theme', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Use theme colors', 'simple-multilang-blocks' ); ?></option><option value="light" <?php selected( 'light', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Light', 'simple-multilang-blocks' ); ?></option><option value="dark" <?php selected( 'dark', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Dark', 'simple-multilang-blocks' ); ?></option><option value="minimal" <?php selected( 'minimal', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Minimal', 'simple-multilang-blocks' ); ?></option></select></label> <label><?php esc_html_e( 'Theme-specific CSS class', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_switcher_custom_class" value="<?php echo esc_attr( self::get_switcher_custom_class() ); ?>" placeholder="my-theme-language-switcher"></label></p><p class="description"><code>[sml_language_switcher style="dropdown"]</code> <?php esc_html_e( 'inherits this theme setting; use appearance="light" or another appearance in a shortcode when needed.', 'simple-multilang-blocks' ); ?></p>
+        <h2><?php esc_html_e( 'Language switcher', 'simple-multilang-blocks' ); ?></h2>
+        <p><label><input type="radio" name="sml_switcher_placement" value="automatic" <?php checked( 'automatic', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Show a floating switcher automatically', 'simple-multilang-blocks' ); ?></label><br><label><input type="radio" name="sml_switcher_placement" value="shortcode" <?php checked( 'shortcode', get_option( self::OPTION_SWITCHER_PLACEMENT, 'automatic' ) ); ?>> <?php esc_html_e( 'Use shortcode or the Language switcher block in the header', 'simple-multilang-blocks' ); ?></label></p>
+        <p><label><?php esc_html_e( 'Appearance for this theme', 'simple-multilang-blocks' ); ?> <select name="sml_switcher_appearance"><option value="theme" <?php selected( 'theme', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Use theme colors', 'simple-multilang-blocks' ); ?></option><option value="light" <?php selected( 'light', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Light', 'simple-multilang-blocks' ); ?></option><option value="dark" <?php selected( 'dark', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Dark', 'simple-multilang-blocks' ); ?></option><option value="minimal" <?php selected( 'minimal', self::get_switcher_appearance() ); ?>><?php esc_html_e( 'Minimal', 'simple-multilang-blocks' ); ?></option></select></label> <label><?php esc_html_e( 'Theme-specific CSS class', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_switcher_custom_class" value="<?php echo esc_attr( self::get_switcher_custom_class() ); ?>" placeholder="my-theme-language-switcher"></label></p>
+        <h3><?php esc_html_e( 'Quick design', 'simple-multilang-blocks' ); ?></h3>
+        <p><label><?php esc_html_e( 'Layout', 'simple-multilang-blocks' ); ?> <select name="sml_switcher_design[style]"><option value="pills" <?php selected( 'pills', $switcher_design['style'] ); ?>><?php esc_html_e( 'Header pill', 'simple-multilang-blocks' ); ?></option><option value="dropdown" <?php selected( 'dropdown', $switcher_design['style'] ); ?>><?php esc_html_e( 'Rounded selector', 'simple-multilang-blocks' ); ?></option><option value="list" <?php selected( 'list', $switcher_design['style'] ); ?>><?php esc_html_e( 'Vertical list', 'simple-multilang-blocks' ); ?></option></select></label> <label><?php esc_html_e( 'Density', 'simple-multilang-blocks' ); ?> <select name="sml_switcher_design[density]"><option value="regular" <?php selected( 'regular', $switcher_design['density'] ); ?>><?php esc_html_e( 'Regular', 'simple-multilang-blocks' ); ?></option><option value="compact" <?php selected( 'compact', $switcher_design['density'] ); ?>><?php esc_html_e( 'Compact', 'simple-multilang-blocks' ); ?></option></select></label> <label><?php esc_html_e( 'Floating position', 'simple-multilang-blocks' ); ?> <select name="sml_switcher_design[position]"><option value="top-right" <?php selected( 'top-right', $switcher_design['position'] ); ?>><?php esc_html_e( 'Top right', 'simple-multilang-blocks' ); ?></option><option value="top-left" <?php selected( 'top-left', $switcher_design['position'] ); ?>><?php esc_html_e( 'Top left', 'simple-multilang-blocks' ); ?></option><option value="bottom-right" <?php selected( 'bottom-right', $switcher_design['position'] ); ?>><?php esc_html_e( 'Bottom right', 'simple-multilang-blocks' ); ?></option><option value="bottom-left" <?php selected( 'bottom-left', $switcher_design['position'] ); ?>><?php esc_html_e( 'Bottom left', 'simple-multilang-blocks' ); ?></option></select></label></p>
+        <p><label><input type="checkbox" name="sml_switcher_design[show_name]" value="1" <?php checked( $switcher_design['show_name'] ); ?>> <?php esc_html_e( 'Show language names', 'simple-multilang-blocks' ); ?></label> <label><input type="checkbox" name="sml_switcher_design[show_flag]" value="1" <?php checked( $switcher_design['show_flag'] ); ?>> <?php esc_html_e( 'Show flags', 'simple-multilang-blocks' ); ?></label></p>
+        <p><label><input type="checkbox" name="sml_switcher_custom_colors" value="1" <?php checked( $switcher_has_custom_colors ); ?>> <?php esc_html_e( 'Use custom colours for this theme', 'simple-multilang-blocks' ); ?></label></p>
+        <p class="sml-switcher-colors"><label><?php esc_html_e( 'Background', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[surface]" value="<?php echo esc_attr( $switcher_design['surface'] ?: '#ffffff' ); ?>"></label> <label><?php esc_html_e( 'Text', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[foreground]" value="<?php echo esc_attr( $switcher_design['foreground'] ?: '#27364a' ); ?>"></label> <label><?php esc_html_e( 'Active background', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[accent]" value="<?php echo esc_attr( $switcher_design['accent'] ?: '#174ea6' ); ?>"></label> <label><?php esc_html_e( 'Active text', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[active_foreground]" value="<?php echo esc_attr( $switcher_design['active_foreground'] ?: '#ffffff' ); ?>"></label> <label><?php esc_html_e( 'Border', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[border]" value="<?php echo esc_attr( $switcher_design['border'] ?: '#d6dce5' ); ?>"></label></p>
+        <p class="description"><code>[sml_language_switcher]</code> <?php esc_html_e( 'inherits these settings. Themes can use the shortcode or the block inside a header; automatic mode is a floating fallback.', 'simple-multilang-blocks' ); ?></p>
         <h2><?php esc_html_e( 'Automatic translation', 'simple-multilang-blocks' ); ?></h2><p><label><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?> <select name="sml_translation_provider"><option value="" <?php selected( '', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'Disabled', 'simple-multilang-blocks' ); ?></option><option value="deepl" <?php selected( 'deepl', SML_Translation_Service::provider() ); ?>>DeepL</option><option value="openai" <?php selected( 'openai', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'OpenAI / ChatGPT', 'simple-multilang-blocks' ); ?></option></select></label></p><p><label><?php esc_html_e( 'OpenAI model', 'simple-multilang-blocks' ); ?> <input type="text" name="sml_openai_model" value="<?php echo esc_attr( get_option( SML_Translation_Service::OPTION_OPENAI_MODEL, 'gpt-5-mini' ) ); ?>"></label></p><p><label><?php esc_html_e( 'DeepL endpoint', 'simple-multilang-blocks' ); ?> <select name="sml_deepl_endpoint"><option value="free" <?php selected( 'free', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api-free.deepl.com</option><option value="pro" <?php selected( 'pro', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api.deepl.com</option></select></label></p><div class="notice notice-info inline"><p><?php esc_html_e( 'API keys are never stored in WordPress. Generated posts remain drafts and generated taxonomy terms require review; if the service is unavailable, no content is created and no public-page error is shown. Add either SML_DEEPL_API_KEY or SML_OPENAI_API_KEY to wp-config.php.', 'simple-multilang-blocks' ); ?></p></div>
         <p><button class="button button-primary"><?php esc_html_e( 'Save settings', 'simple-multilang-blocks' ); ?></button></p></form>
         <hr><h2><?php esc_html_e( 'WPML migration', 'simple-multilang-blocks' ); ?></h2><p><?php esc_html_e( 'Imports active languages, selected posts, selected taxonomies and String Translation values. It never deletes WPML tables or options.', 'simple-multilang-blocks' ); ?></p>
@@ -1735,6 +1907,27 @@ final class SML_Core {
         $switcher_classes = (array) get_option( self::OPTION_SWITCHER_CLASS, array() );
         $switcher_classes[ get_stylesheet() ] = isset( $_POST['sml_switcher_custom_class'] ) ? sanitize_html_class( wp_unslash( $_POST['sml_switcher_custom_class'] ) ) : '';
         update_option( self::OPTION_SWITCHER_CLASS, $switcher_classes );
+        $submitted_design = isset( $_POST['sml_switcher_design'] ) && is_array( $_POST['sml_switcher_design'] ) ? wp_unslash( $_POST['sml_switcher_design'] ) : array();
+        $design = array(
+            'style'             => isset( $submitted_design['style'] ) && in_array( sanitize_key( $submitted_design['style'] ), array( 'pills', 'dropdown', 'list' ), true ) ? sanitize_key( $submitted_design['style'] ) : 'pills',
+            'density'           => isset( $submitted_design['density'] ) && 'compact' === sanitize_key( $submitted_design['density'] ) ? 'compact' : 'regular',
+            'position'          => isset( $submitted_design['position'] ) && in_array( sanitize_key( $submitted_design['position'] ), array( 'top-right', 'top-left', 'bottom-right', 'bottom-left' ), true ) ? sanitize_key( $submitted_design['position'] ) : 'top-right',
+            'show_name'         => ! empty( $submitted_design['show_name'] ),
+            'show_flag'         => ! empty( $submitted_design['show_flag'] ),
+            'surface'           => '',
+            'foreground'        => '',
+            'accent'            => '',
+            'active_foreground' => '',
+            'border'            => '',
+        );
+        if ( ! empty( $_POST['sml_switcher_custom_colors'] ) ) {
+            foreach ( array( 'surface', 'foreground', 'accent', 'active_foreground', 'border' ) as $color ) {
+                $design[ $color ] = isset( $submitted_design[ $color ] ) ? ( sanitize_hex_color( $submitted_design[ $color ] ) ?: '' ) : '';
+            }
+        }
+        $switcher_designs = (array) get_option( self::OPTION_SWITCHER_DESIGN, array() );
+        $switcher_designs[ get_stylesheet() ] = $design;
+        update_option( self::OPTION_SWITCHER_DESIGN, $switcher_designs );
         SML_Theme_Strings::save_interface_settings(
             isset( $_POST['sml_interface_plugin_domains'] ) && is_array( $_POST['sml_interface_plugin_domains'] ) ? wp_unslash( $_POST['sml_interface_plugin_domains'] ) : array(),
             ! empty( $_POST['sml_interface_string_capture'] ),

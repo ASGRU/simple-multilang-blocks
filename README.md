@@ -15,7 +15,7 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 
 ## Release process
 
-Push a semantic-version tag such as `v1.5.0`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
+Push a semantic-version tag such as `v1.6.0`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
@@ -38,6 +38,25 @@ Translations are applied only to the public site interface by default. The WordP
 ## Language switcher appearance
 
 Switcher placement and appearance are stored per active theme. **Use theme colors** inherits `theme.json` colour presets when available; light, dark and minimal variants are also available. A theme-specific CSS class can be supplied for a project's own style layer.
+
+**Settings → Simple Multilang → Language switcher → Quick design** provides a header-style pill (the default), a rounded vertical selector or a compact vertical list; regular/compact spacing; language names and flags independently; four floating positions; and five optional theme-specific colours. `[sml_language_switcher]` and the Language switcher block inherit these settings. Use the shortcode or block inside a header; automatic mode is the floating fallback.
+
+Themes can customise the selector without copying plugin templates:
+
+```php
+add_filter( 'sml_language_switcher_design', function ( $design ) {
+    $design['style'] = 'pills';
+    $design['density'] = 'compact';
+    return $design;
+} );
+
+add_filter( 'sml_language_switcher_css_variables', function ( $variables ) {
+    $variables['--sml-accent'] = '#1d5db8';
+    return $variables;
+} );
+```
+
+Further extension points are `sml_language_switcher_args`, `sml_language_switcher_links`, `sml_language_switcher_languages`, `sml_language_switcher_classes`, `sml_language_switcher_item`, `sml_language_switcher_html` and `sml_automatic_language_switcher_html`. When WPML is inactive, the public `wpml_current_language`, `wpml_object_id`, `wpml_active_languages` filters and `icl_get_languages()` are also available for themes that use those common WPML integration points.
 
 ## Menus
 

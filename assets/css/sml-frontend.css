@@ -5,10 +5,23 @@
     right: max(16px, env(safe-area-inset-right));
 }
 
+.sml-switcher-slot--top-left,
+.sml-switcher-slot--bottom-left {
+    right: auto;
+    left: max(16px, env(safe-area-inset-left));
+}
+
+.sml-switcher-slot--bottom-right,
+.sml-switcher-slot--bottom-left {
+    top: auto;
+    bottom: max(16px, env(safe-area-inset-bottom));
+}
+
 .sml-language-switcher {
     --sml-surface: var(--wp--preset--color--base, rgba(255, 255, 255, .94));
     --sml-foreground: var(--wp--preset--color--contrast, #27364a);
     --sml-accent: var(--wp--preset--color--primary, #174ea6);
+    --sml-active-foreground: var(--wp--preset--color--base, #fff);
     --sml-hover: rgba(23, 78, 166, .12);
     --sml-hover: color-mix(in srgb, var(--sml-accent) 12%, var(--sml-surface));
     --sml-border: rgba(20, 30, 45, .12);
@@ -53,7 +66,7 @@
 
 .sml-language-switcher .is-active a {
     background: var(--sml-accent);
-    color: var(--wp--preset--color--base, #fff);
+    color: var(--sml-active-foreground);
 }
 
 .sml-language-switcher__flag {
@@ -74,6 +87,19 @@
     box-shadow: none;
 }
 
+.sml-language-switcher--dropdown ul {
+    display: grid;
+    min-width: 180px;
+    gap: 2px;
+    border-radius: 14px;
+}
+
+.sml-language-switcher--dropdown a {
+    width: 100%;
+    justify-content: flex-start;
+    border-radius: 9px;
+}
+
 .sml-language-switcher[data-sml-appearance="light"] {
     --sml-surface: rgba(255, 255, 255, .96);
     --sml-foreground: #27364a;
@@ -88,10 +114,22 @@
     --sml-accent: #86b7ff;
     --sml-hover: rgba(134, 183, 255, .18);
     --sml-border: rgba(255, 255, 255, .2);
+    --sml-active-foreground: #132033;
 }
 
-.sml-language-switcher[data-sml-appearance="dark"] .is-active a {
-    color: #132033;
+.sml-language-switcher--compact ul {
+    gap: 2px;
+    padding: 3px;
+}
+
+.sml-language-switcher--compact a {
+    min-height: 28px;
+    padding: 0 9px;
+    font-size: 13px;
+}
+
+.sml-language-switcher--compact .sml-language-switcher__flag {
+    font-size: 14px;
 }
 
 .sml-language-switcher[data-sml-appearance="minimal"] ul {
@@ -105,6 +143,10 @@
 .sml-language-switcher--list ul {
     display: grid;
     border-radius: 12px;
+}
+
+.sml-language-switcher--list a {
+    border-radius: 8px;
 }
 
 @media (max-width: 640px) {
