@@ -15,7 +15,7 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 
 ## Release process
 
-Push a semantic-version tag such as `v1.7.0`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
+Push a semantic-version tag such as `v1.8.0`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
@@ -89,6 +89,10 @@ The admin settings select the DeepL Free/Pro endpoint and a short OpenAI model l
 ### Visitor-triggered drafts
 
 Under **Settings → Simple Multilang → Automatic translation**, an editor may opt in to create a review-only draft when a visitor opens public source content through a language URL that has no linked translation. This is off by default: public crawlers can otherwise consume a translation budget. The setting has a daily cap (10 by default, 100 maximum); repeated requests for the same item and failed jobs do not consume the budget again. No API call runs in the page response and no visitor identifiers are stored. The page remains safely available in its current source form until an editor reviews and publishes the generated draft. Use `sml_on_demand_translation_candidate` to reject individual source items, or `sml_on_demand_translation_enabled` and `sml_on_demand_translation_daily_limit` for code-level policy.
+
+### Translation freshness
+
+When an editor changes the title, excerpt or content of a post/page/product in a linked group, its other language versions are marked **Source updated**. No text is copied, replaced or published. The status appears in the editor, the post list and **Tools → Translation review**; after reviewing an affected version, use **Mark verified** to clear it. New manual and machine drafts record the exact source revision they were based on.
 
 ## PO exchange and switcher block
 

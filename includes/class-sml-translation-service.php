@@ -741,6 +741,7 @@ final class SML_Translation_Service {
 
         update_post_meta( $new_post_id, '_sml_translation_status', 'manual' === $provider ? 'draft' : 'needs_review' );
         update_post_meta( $new_post_id, '_sml_translation_source', $source_post_id );
+        update_post_meta( $new_post_id, '_sml_translation_source_hash', SML_Core::post_translation_content_hash( $source_post_id ) );
         update_post_meta( $new_post_id, '_sml_translation_provider', sanitize_key( $provider ) );
         update_post_meta( $new_post_id, '_sml_translation_created_at', current_time( 'mysql', true ) );
 

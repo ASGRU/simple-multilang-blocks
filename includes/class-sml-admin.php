@@ -65,6 +65,8 @@ final class SML_Admin {
                 printf( '<a class="sml-language-action is-existing" href="%1$s" title="%2$s"><span class="dashicons dashicons-edit"></span><span>%3$s</span></a>', esc_url( get_edit_post_link( $translation_id, '' ) ), esc_attr( sprintf( __( 'Edit %s translation', 'simple-multilang-blocks' ), $language['name'] ) ), esc_html( $flag ) );
                 if ( 'needs_review' === $status ) {
                     echo '<span class="sml-review-dot" title="' . esc_attr__( 'Requires review', 'simple-multilang-blocks' ) . '"></span>';
+                } elseif ( 'outdated' === $status ) {
+                    echo '<span class="sml-outdated-dot" title="' . esc_attr__( 'Source updated — review this translation', 'simple-multilang-blocks' ) . '"></span>';
                 }
             } elseif ( $can_edit && $slug !== $current ) {
                 $manual_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_create_translation', 'post' => $post_id, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_create_translation_' . $post_id . '_' . $slug );
@@ -160,8 +162,11 @@ final class SML_Admin {
                 'posts_per_page'         => 50,
                 'orderby'                => 'modified',
                 'order'                  => 'DESC',
-                'meta_key'               => '_sml_translation_status',
-                'meta_value'             => 'needs_review',
+                'meta_query'             => array(
+                    'relation' => 'OR',
+                    array( 'key' => '_sml_translation_status', 'value' => 'needs_review' ),
+                    array( 'key' => '_sml_translation_status', 'value' => 'outdated' ),
+                ),
                 'no_found_rows'          => true,
                 'ignore_sticky_posts'    => true,
                 'suppress_filters'       => true,
@@ -191,20 +196,21 @@ final class SML_Admin {
         ?>
         <div class="wrap sml-admin-wrap">
             <h1><?php esc_html_e( 'Translation review', 'simple-multilang-blocks' ); ?></h1>
-            <p class="description"><?php esc_html_e( 'Machine translations remain drafts until an editor verifies and publishes them. The queue keeps only request status and never stores source text or API credentials.', 'simple-multilang-blocks' ); ?></p>
+            <p class="description"><?php esc_html_e( 'Machine translations remain drafts until an editor verifies and publishes them. When a linked source changes, its counterpart is marked as outdated for review. The queue keeps only request status and never stores source text or API credentials.', 'simple-multilang-blocks' ); ?></p>
             <?php if ( isset( $_GET['sml_requeued'] ) ) : ?><div class="notice notice-success inline"><p><?php esc_html_e( 'The translation was added to the queue again.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
             <?php if ( isset( $_GET['sml_retry_error'] ) ) : ?><div class="notice notice-warning inline"><p><?php esc_html_e( 'The translation could not be queued. Check the source, target language and translation provider.', 'simple-multilang-blocks' ); ?></p></div><?php endif; ?>
 
-            <h2><?php esc_html_e( 'Requires review', 'simple-multilang-blocks' ); ?></h2>
+            <h2><?php esc_html_e( 'Translations needing review', 'simple-multilang-blocks' ); ?></h2>
             <?php if ( $query->have_posts() ) : ?>
-                <table class="widefat striped sml-review-table"><thead><tr><th><?php esc_html_e( 'Translation', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Source', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Language', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?></th><th></th></tr></thead><tbody>
+                <table class="widefat striped sml-review-table"><thead><tr><th><?php esc_html_e( 'Translation', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Source', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Language', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Status', 'simple-multilang-blocks' ); ?></th><th><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?></th><th></th></tr></thead><tbody>
                 <?php foreach ( $query->posts as $post ) :
                     if ( ! current_user_can( 'edit_post', $post->ID ) ) { continue; }
                     $source_id = absint( get_post_meta( $post->ID, '_sml_translation_source', true ) );
                     $source = $source_id ? get_post( $source_id ) : false;
                     $language = SML_Core::get_post_language( $post->ID );
+                    $status = get_post_meta( $post->ID, '_sml_translation_status', true );
                 ?>
-                    <tr><td><strong><?php echo esc_html( get_the_title( $post ) ); ?></strong><br><span class="description"><?php echo esc_html( get_post_status( $post ) ); ?></span></td><td><?php if ( $source && current_user_can( 'edit_post', $source->ID ) ) : ?><a href="<?php echo esc_url( get_edit_post_link( $source->ID, '' ) ); ?>"><?php echo esc_html( get_the_title( $source ) ); ?></a><?php else : ?>—<?php endif; ?></td><td><?php echo esc_html( isset( $languages[ $language ] ) ? SML_Core::get_language_flag( $languages[ $language ] ) . ' ' . $languages[ $language ]['name'] : $language ); ?></td><td><?php echo esc_html( get_post_meta( $post->ID, '_sml_translation_provider', true ) ); ?></td><td><a class="button button-primary" href="<?php echo esc_url( get_edit_post_link( $post->ID, '' ) ); ?>"><?php esc_html_e( 'Review', 'simple-multilang-blocks' ); ?></a></td></tr>
+                    <tr><td><strong><?php echo esc_html( get_the_title( $post ) ); ?></strong><br><span class="description"><?php echo esc_html( get_post_status( $post ) ); ?></span></td><td><?php if ( $source && current_user_can( 'edit_post', $source->ID ) ) : ?><a href="<?php echo esc_url( get_edit_post_link( $source->ID, '' ) ); ?>"><?php echo esc_html( get_the_title( $source ) ); ?></a><?php else : ?>—<?php endif; ?></td><td><?php echo esc_html( isset( $languages[ $language ] ) ? SML_Core::get_language_flag( $languages[ $language ] ) . ' ' . $languages[ $language ]['name'] : $language ); ?></td><td><span class="sml-translation-status is-<?php echo esc_attr( $status ); ?>"><?php echo esc_html( 'outdated' === $status ? __( 'Source updated', 'simple-multilang-blocks' ) : __( 'Requires review', 'simple-multilang-blocks' ) ); ?></span></td><td><?php echo esc_html( get_post_meta( $post->ID, '_sml_translation_provider', true ) ); ?></td><td><a class="button button-primary" href="<?php echo esc_url( get_edit_post_link( $post->ID, '' ) ); ?>"><?php esc_html_e( 'Review', 'simple-multilang-blocks' ); ?></a></td></tr>
                 <?php endforeach; ?>
                 </tbody></table>
             <?php else : ?><p><?php esc_html_e( 'There are no machine translations waiting for review.', 'simple-multilang-blocks' ); ?></p><?php endif; wp_reset_postdata(); ?>
@@ -239,17 +245,24 @@ final class SML_Admin {
     public function mark_translation_verified() {
         $post_id = $this->request_post_id( 'sml_mark_translation_verified' );
         update_post_meta( $post_id, '_sml_translation_status', 'verified' );
+        $source_id = absint( get_post_meta( $post_id, '_sml_translation_source', true ) );
+        if ( $source_id ) {
+            update_post_meta( $post_id, '_sml_translation_source_hash', SML_Core::post_translation_content_hash( $source_id ) );
+        }
+        delete_post_meta( $post_id, '_sml_translation_outdated_at' );
         wp_safe_redirect( add_query_arg( 'sml_verified', '1', get_edit_post_link( $post_id, 'url' ) ) );
         exit;
     }
 
     public function render_review_status() {
         $post_id = get_the_ID();
-        if ( ! $post_id || 'needs_review' !== get_post_meta( $post_id, '_sml_translation_status', true ) ) {
+        $status = $post_id ? get_post_meta( $post_id, '_sml_translation_status', true ) : '';
+        if ( ! $post_id || ! in_array( $status, array( 'needs_review', 'outdated' ), true ) ) {
             return;
         }
         $url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_mark_translation_verified', 'post' => $post_id ), admin_url( 'admin-post.php' ) ), 'sml_mark_translation_verified_' . $post_id );
-        echo '<div class="misc-pub-section sml-review-status"><span class="dashicons dashicons-warning"></span> ' . esc_html__( 'Machine translation — requires review.', 'simple-multilang-blocks' ) . ' <a href="' . esc_url( $url ) . '">' . esc_html__( 'Mark verified', 'simple-multilang-blocks' ) . '</a></div>';
+        $message = 'outdated' === $status ? __( 'The linked source was updated — review this translation.', 'simple-multilang-blocks' ) : __( 'Machine translation — requires review.', 'simple-multilang-blocks' );
+        echo '<div class="misc-pub-section sml-review-status is-' . esc_attr( $status ) . '"><span class="dashicons dashicons-warning"></span> ' . esc_html( $message ) . ' <a href="' . esc_url( $url ) . '">' . esc_html__( 'Mark verified', 'simple-multilang-blocks' ) . '</a></div>';
     }
 
     public function render_notices() {

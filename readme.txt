@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.7.0
+Stable tag: 1.8.0
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -20,6 +20,7 @@ A lightweight multilingual layer for block-based WordPress sites.
 * Manual draft creation and editor-triggered DeepL/OpenAI translations through a bounded background queue, always marked for review.
 * Responses API-compatible OpenAI translation requests and a curated GPT-5 mini/nano model selector.
 * Translation Review workspace with queue status and safe retry for a failed provider request.
+* Source-change tracking marks linked post translations as outdated without overwriting or publishing content.
 * PO import/export for the plugin's editable public-interface string catalogue.
 * Gutenberg Language Switcher block, alongside the automatic and shortcode variants.
 * WooCommerce product and related-product lists follow the active language without affecting checkout, account, REST or admin requests.

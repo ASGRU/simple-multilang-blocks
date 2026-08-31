@@ -17,7 +17,10 @@
 .sml-language-action.is-missing { border-color: #a6adb4; background: #fff; color: #4d555d; }
 .sml-language-action.is-machine { border-color: #759ce7; background: #f1f5ff; color: #1d4ed8; }
 .sml-review-dot { width: 8px; height: 8px; border-radius: 50%; background: #d63638; }
+.sml-outdated-dot { width: 8px; height: 8px; border-radius: 50%; background: #d97706; }
 .sml-review-badge { display: inline-block; margin-left: 5px; padding: 2px 5px; border-radius: 3px; background: #fff3cd; color: #6b4d00; font-size: 11px; font-weight: 600; }
+.sml-outdated-badge, .sml-translation-status.is-outdated { display: inline-block; margin-left: 5px; padding: 2px 5px; border-radius: 3px; background: #fff2e5; color: #8a4b08; font-size: 11px; font-weight: 600; }
+.sml-translation-status.is-needs_review { display: inline-block; padding: 2px 5px; border-radius: 3px; background: #fff3cd; color: #6b4d00; font-size: 11px; font-weight: 600; }
 .sml-review-status .dashicons { color: #dba617; }
 .sml-queue-dot { width: 8px; height: 8px; border-radius: 50%; background: #2271b1; box-shadow: 0 0 0 2px #e7f5fe; }
 .sml-review-table { max-width: 1120px; }

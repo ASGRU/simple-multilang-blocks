@@ -66,6 +66,7 @@ final class SML_Core {
 
         add_action( 'add_meta_boxes', array( $this, 'register_post_meta_boxes' ) );
         add_action( 'save_post', array( $this, 'save_post_language' ), 20, 2 );
+        add_action( 'save_post', array( $this, 'track_post_translation_freshness' ), 30, 2 );
         add_action( 'init', array( $this, 'register_term_language_fields' ), 20 );
 
         add_action( 'admin_menu', array( $this, 'register_settings_page' ) );
@@ -1320,6 +1321,7 @@ final class SML_Core {
             <?php if ( ! empty( $translations[ $slug ] ) ) : $translation_id = absint( $translations[ $slug ] ); ?>
                 <a class="button button-small" href="<?php echo esc_url( get_edit_post_link( $translation_id, '' ) ); ?>"><?php esc_html_e( 'Edit translation', 'simple-multilang-blocks' ); ?></a>
                 <?php if ( 'needs_review' === get_post_meta( $translation_id, '_sml_translation_status', true ) ) : ?><span class="sml-review-badge"><?php esc_html_e( 'Requires review', 'simple-multilang-blocks' ); ?></span><?php endif; ?>
+                <?php if ( 'outdated' === get_post_meta( $translation_id, '_sml_translation_status', true ) ) : ?><span class="sml-outdated-badge"><?php esc_html_e( 'Source updated', 'simple-multilang-blocks' ); ?></span><?php endif; ?>
             <?php elseif ( $slug !== $current ) :
                 $manual_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_create_translation', 'post' => $post->ID, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_create_translation_' . $post->ID . '_' . $slug );
                 $machine_url = wp_nonce_url( add_query_arg( array( 'action' => 'sml_translate_post', 'post' => $post->ID, 'lang' => $slug ), admin_url( 'admin-post.php' ) ), 'sml_translate_post_' . $post->ID . '_' . $slug );
@@ -1367,6 +1369,54 @@ final class SML_Core {
         }
 
         self::sync_post_translations( $translations );
+    }
+
+    /** Stable hash of content that requires a human translation update. */
+    public static function post_translation_content_hash( $post_id ) {
+        $post = get_post( $post_id );
+        if ( ! $post ) {
+            return '';
+        }
+        return hash( 'sha256', (string) $post->post_title . "\0" . (string) $post->post_excerpt . "\0" . (string) $post->post_content );
+    }
+
+    /**
+     * Marks linked language versions as outdated when their source changes.
+     * No content is copied or published; editors retain full review control.
+     */
+    public function track_post_translation_freshness( $post_id, $post ) {
+        if ( wp_is_post_revision( $post_id ) || wp_is_post_autosave( $post_id ) || ! $post || ! in_array( $post->post_type, self::get_post_types(), true ) ) {
+            return;
+        }
+
+        $hash = self::post_translation_content_hash( $post_id );
+        if ( '' === $hash ) {
+            return;
+        }
+        $previous_hash = (string) get_post_meta( $post_id, '_sml_translation_content_hash', true );
+        update_post_meta( $post_id, '_sml_translation_content_hash', $hash );
+        if ( '' === $previous_hash || hash_equals( $previous_hash, $hash ) ) {
+            return;
+        }
+
+        $translations = self::get_post_translations( $post_id );
+        if ( count( $translations ) < 2 ) {
+            return;
+        }
+        foreach ( $translations as $language => $translation_id ) {
+            $translation_id = absint( $translation_id );
+            if ( ! $translation_id || $translation_id === (int) $post_id || self::get_post_language( $translation_id ) === self::get_post_language( $post_id ) ) {
+                continue;
+            }
+            $translation = get_post( $translation_id );
+            if ( ! $translation || $translation->post_type !== $post->post_type || 'trash' === $translation->post_status ) {
+                continue;
+            }
+            update_post_meta( $translation_id, '_sml_translation_status', 'outdated' );
+            update_post_meta( $translation_id, '_sml_translation_source', $post_id );
+            update_post_meta( $translation_id, '_sml_translation_source_hash', $hash );
+            update_post_meta( $translation_id, '_sml_translation_outdated_at', current_time( 'mysql', true ) );
+        }
     }
 
     public function register_term_language_fields() {
