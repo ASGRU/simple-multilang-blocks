@@ -16,6 +16,7 @@ final class SML_Translation_Service {
     const OPTION_TERM_JOBS      = 'sml_term_translation_jobs';
     const CRON_HOOK             = 'sml_process_translation_job';
     const TERM_CRON_HOOK        = 'sml_process_term_translation_job';
+    const DEFAULT_OPENAI_MODEL  = 'gpt-5-mini';
     const MAX_ATTEMPTS          = 3;
     const MAX_STORED_JOBS       = 100;
 
@@ -39,6 +40,51 @@ final class SML_Translation_Service {
             return 'OpenAI';
         }
         return __( 'Not configured', 'simple-multilang-blocks' );
+    }
+
+    /**
+     * A deliberately short, cost-conscious model list for written translation.
+     * Themes may extend the list through the filter when a project has evaluated
+     * a different model for its particular editorial requirements.
+     */
+    public static function openai_models() {
+        $models = array(
+            self::DEFAULT_OPENAI_MODEL => array(
+                'label'       => 'GPT-5 mini',
+                'description' => __( 'Recommended — balanced translation quality, speed and cost.', 'simple-multilang-blocks' ),
+            ),
+            'gpt-5-nano' => array(
+                'label'       => 'GPT-5 nano',
+                'description' => __( 'Lowest cost — use for simple, high-volume content after editorial evaluation.', 'simple-multilang-blocks' ),
+            ),
+        );
+        $models = apply_filters( 'sml_openai_translation_models', $models );
+        $sanitized = array();
+        foreach ( (array) $models as $model => $details ) {
+            $model = sanitize_key( (string) $model );
+            if ( ! $model || ! is_array( $details ) || empty( $details['label'] ) || ! is_scalar( $details['label'] ) ) {
+                continue;
+            }
+            $sanitized[ $model ] = array(
+                'label'       => sanitize_text_field( (string) $details['label'] ),
+                'description' => isset( $details['description'] ) && is_scalar( $details['description'] ) ? sanitize_text_field( (string) $details['description'] ) : '',
+            );
+        }
+        if ( ! isset( $sanitized[ self::DEFAULT_OPENAI_MODEL ] ) ) {
+            $sanitized[ self::DEFAULT_OPENAI_MODEL ] = array(
+                'label'       => 'GPT-5 mini',
+                'description' => __( 'Recommended — balanced translation quality, speed and cost.', 'simple-multilang-blocks' ),
+            );
+        }
+        return $sanitized;
+    }
+
+    /** Returns only a reviewed model from the selected list. */
+    public static function openai_model() {
+        $model = defined( 'SML_OPENAI_MODEL' ) ? (string) SML_OPENAI_MODEL : (string) get_option( self::OPTION_OPENAI_MODEL, self::DEFAULT_OPENAI_MODEL );
+        $model = sanitize_key( $model );
+        $models = self::openai_models();
+        return isset( $models[ $model ] ) ? $model : self::DEFAULT_OPENAI_MODEL;
     }
 
     public static function is_available() {
@@ -781,14 +827,13 @@ final class SML_Translation_Service {
      */
     private static function translate_with_openai( $fields, $source_language, $target_language ) {
         $languages = SML_Core::get_languages();
-        $model = defined( 'SML_OPENAI_MODEL' ) ? (string) SML_OPENAI_MODEL : (string) get_option( self::OPTION_OPENAI_MODEL, 'gpt-5-mini' );
-        $model = sanitize_text_field( $model );
+        $model = self::openai_model();
         if ( '' === $model ) {
             return new WP_Error( 'sml_openai_model', __( 'An OpenAI model must be configured before translating.', 'simple-multilang-blocks' ) );
         }
 
         $instructions = sprintf(
-            'Translate the supplied WordPress content from %1$s to %2$s. Preserve HTML tags, Gutenberg block comments, placeholders, URLs, shortcodes, product codes and line breaks. Do not add commentary. Return one JSON object with exactly the keys title, excerpt and content; use empty strings for empty source fields.',
+            'Translate the supplied WordPress content from %1$s to %2$s. Preserve HTML tags, Gutenberg block comments, placeholders, URLs, shortcodes, product codes and line breaks. Do not add commentary. Return one json object with exactly the keys title, excerpt and content; use empty strings for empty source fields.',
             $languages[ $source_language ]['name'],
             $languages[ $target_language ]['name']
         );
@@ -796,7 +841,7 @@ final class SML_Translation_Service {
             'model'        => $model,
             'store'        => false,
             'instructions' => $instructions,
-            'input'        => wp_json_encode( $fields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
+            'input'        => 'json: ' . wp_json_encode( $fields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
             'text'         => array( 'format' => array( 'type' => 'json_object' ) ),
         );
         $response = wp_remote_post( 'https://api.openai.com/v1/responses', array(

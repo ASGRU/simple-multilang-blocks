@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.6.0
+Stable tag: 1.6.1
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -18,6 +18,7 @@ A lightweight multilingual layer for block-based WordPress sites.
 * WPML migration for content relationships and String Translation entries.
 * Public-interface string screen for the active theme and selected plugins.
 * Manual draft creation and editor-triggered DeepL/OpenAI translations through a bounded background queue, always marked for review.
+* Responses API-compatible OpenAI translation requests and a curated GPT-5 mini/nano model selector.
 * Translation Review workspace with queue status and safe retry for a failed provider request.
 * PO import/export for the plugin's editable public-interface string catalogue.
 * Gutenberg Language Switcher block, alongside the automatic and shortcode variants.
@@ -45,7 +46,7 @@ or
 
 `define( 'SML_OPENAI_API_KEY', '...' );`
 
-Optional: `define( 'SML_OPENAI_MODEL', 'gpt-5-mini' );`
+The model selector offers a reviewed, economical list: **GPT-5 mini** (recommended for written translation) and **GPT-5 nano** (simple high-volume text after editorial evaluation). A `SML_OPENAI_MODEL` value in `wp-config.php` can override the selector, but the plugin accepts only these reviewed choices unless a developer extends `sml_openai_translation_models`.
 
 The plugin never sends content to a provider until an editor queues a translation. The request runs through a small WordPress background queue and retries a temporary provider problem up to three times. Successful post results are linked drafts; taxonomy terms use the same queue and a review marker. Neither is published automatically. Failed jobs remain visible in **Tools → Translation review**. If a provider is unavailable, no duplicate content, term or frontend error is shown.
 
