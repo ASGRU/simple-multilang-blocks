@@ -171,6 +171,15 @@ final class SML_Theme_Strings {
         global $wpdb;
         $strings_table = SML_Core::strings_table();
         $search = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
+        $sources = self::catalogue_sources();
+        $available_sources = wp_list_pluck( $sources, 'context' );
+        $source = isset( $_GET['source'] ) ? sanitize_text_field( wp_unslash( $_GET['source'] ) ) : '';
+        // The selected value must be one of the catalogue contexts actually
+        // stored in this site. This keeps the SQL exact and makes imported
+        // WPML contexts filterable alongside themes and plugins.
+        if ( ! in_array( $source, $available_sources, true ) ) {
+            $source = '';
+        }
         $page = max( 1, absint( $_GET['paged'] ?? 1 ) );
         $per_page = 20;
         // Imported WPML String Translation records keep their original context
@@ -181,6 +190,10 @@ final class SML_Theme_Strings {
             $where .= ' AND (context LIKE %s OR name LIKE %s OR source_value LIKE %s)';
             $like = '%' . $wpdb->esc_like( $search ) . '%';
             $args = array( $like, $like, $like );
+        }
+        if ( '' !== $source ) {
+            $where .= ' AND context = %s';
+            $args[] = $source;
         }
         $count_sql = "SELECT COUNT(*) FROM {$strings_table} WHERE {$where}";
         $total = (int) ( $args ? $wpdb->get_var( $wpdb->prepare( $count_sql, $args ) ) : $wpdb->get_var( $count_sql ) );
@@ -208,6 +221,13 @@ final class SML_Theme_Strings {
                     <input type="hidden" name="page" value="sml-theme-strings">
                     <label class="screen-reader-text" for="sml-string-search"><?php esc_html_e( 'Search strings', 'simple-multilang-blocks' ); ?></label>
                     <input id="sml-string-search" type="search" name="s" value="<?php echo esc_attr( $search ); ?>" placeholder="<?php esc_attr_e( 'Search source text', 'simple-multilang-blocks' ); ?>">
+                    <label class="screen-reader-text" for="sml-string-source-filter"><?php esc_html_e( 'Filter by source', 'simple-multilang-blocks' ); ?></label>
+                    <select id="sml-string-source-filter" name="source">
+                        <option value=""><?php esc_html_e( 'All sources', 'simple-multilang-blocks' ); ?></option>
+                        <?php foreach ( $sources as $catalogue_source ) : ?>
+                            <option value="<?php echo esc_attr( $catalogue_source['context'] ); ?>" <?php selected( $source, $catalogue_source['context'] ); ?>><?php echo esc_html( sprintf( _n( '%1$s (%2$d string)', '%1$s (%2$d strings)', $catalogue_source['count'], 'simple-multilang-blocks' ), $catalogue_source['label'], $catalogue_source['count'] ) ); ?></option>
+                        <?php endforeach; ?>
+                    </select>
                     <button class="button"><?php esc_html_e( 'Search', 'simple-multilang-blocks' ); ?></button>
                 </form>
                 <form method="get" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
@@ -229,6 +249,7 @@ final class SML_Theme_Strings {
                 <?php wp_nonce_field( 'sml_save_theme_strings' ); ?>
                 <input type="hidden" name="action" value="sml_save_theme_strings">
                 <input type="hidden" name="s" value="<?php echo esc_attr( $search ); ?>">
+                <input type="hidden" name="source" value="<?php echo esc_attr( $source ); ?>">
                 <input type="hidden" name="paged" value="<?php echo esc_attr( $page ); ?>">
                 <table class="widefat fixed striped sml-strings-table">
                     <thead><tr><th><?php esc_html_e( 'Source', 'simple-multilang-blocks' ); ?></th><?php foreach ( $languages as $language ) : ?><th><?php echo esc_html( SML_Core::get_language_flag( $language ) . ' ' . $language['name'] ); ?></th><?php endforeach; ?></tr></thead>
@@ -251,7 +272,7 @@ final class SML_Theme_Strings {
             $pages = max( 1, (int) ceil( $total / $per_page ) );
             if ( $pages > 1 ) {
                 echo '<div class="tablenav"><div class="tablenav-pages">';
-                echo wp_kses_post( paginate_links( array( 'base' => add_query_arg( array( 's' => $search, 'paged' => '%#%' ), $base_url ), 'format' => '', 'current' => $page, 'total' => $pages ) ) );
+                echo wp_kses_post( paginate_links( array( 'base' => add_query_arg( array( 's' => $search, 'source' => $source, 'paged' => '%#%' ), $base_url ), 'format' => '', 'current' => $page, 'total' => $pages ) ) );
                 echo '</div></div>';
             }
             ?>
@@ -277,6 +298,58 @@ final class SML_Theme_Strings {
             $candidates = glob( trailingslashit( $directory ) . 'languages/*.pot' );
             self::scan_catalogue_files( $candidates, self::string_context( $domain ) );
         }
+    }
+
+    /**
+     * Returns source contexts that exist in the editable catalogue, with a
+     * human-readable label and count for the source filter.
+     *
+     * @return array<int,array{context:string,label:string,count:int}>
+     */
+    private static function catalogue_sources() {
+        global $wpdb;
+        $strings_table = SML_Core::strings_table();
+        $rows = $wpdb->get_results( "SELECT context, COUNT(*) AS string_count FROM {$strings_table} GROUP BY context ORDER BY context ASC" );
+        $sources = array();
+        foreach ( (array) $rows as $row ) {
+            $context = isset( $row->context ) ? (string) $row->context : '';
+            if ( '' === $context ) {
+                continue;
+            }
+            $sources[] = array(
+                'context' => $context,
+                'label'   => self::catalogue_source_label( $context ),
+                'count'   => absint( $row->string_count ?? 0 ),
+            );
+        }
+        usort( $sources, static function ( $left, $right ) {
+            return strcasecmp( $left['label'], $right['label'] );
+        } );
+        return $sources;
+    }
+
+    /** Gives catalogue contexts a readable label without changing their key. */
+    private static function catalogue_source_label( $context ) {
+        $context = (string) $context;
+        if ( 0 === strpos( $context, 'theme:' ) ) {
+            $domain = substr( $context, strlen( 'theme:' ) );
+            $theme = wp_get_theme();
+            $parent = $theme->parent();
+            if ( $domain === (string) $theme->get( 'TextDomain' ) ) {
+                return sprintf( __( 'Theme: %1$s', 'simple-multilang-blocks' ), $theme->get( 'Name' ) );
+            }
+            if ( $parent && $domain === (string) $parent->get( 'TextDomain' ) ) {
+                return sprintf( __( 'Parent theme: %1$s', 'simple-multilang-blocks' ), $parent->get( 'Name' ) );
+            }
+            return sprintf( __( 'Theme: %1$s', 'simple-multilang-blocks' ), $domain );
+        }
+        if ( 0 === strpos( $context, 'plugin:' ) ) {
+            $domain = substr( $context, strlen( 'plugin:' ) );
+            $plugins = self::available_plugin_domains();
+            $name = isset( $plugins[ $domain ]['name'] ) ? $plugins[ $domain ]['name'] : $domain;
+            return sprintf( __( 'Plugin: %1$s', 'simple-multilang-blocks' ), $name );
+        }
+        return sprintf( __( 'Imported: %1$s', 'simple-multilang-blocks' ), $context );
     }
 
     public static function scan_selected_sources() {
@@ -325,7 +398,7 @@ final class SML_Theme_Strings {
                 SML_Core::save_string_translation( $string_id, $language, $value, ! empty( $entry['needs_review'] ) ? 'needs_review' : 'verified' );
             }
         }
-        $url = add_query_arg( array( 'saved' => '1', 's' => isset( $_POST['s'] ) ? sanitize_text_field( $_POST['s'] ) : '', 'paged' => absint( $_POST['paged'] ?? 1 ) ), admin_url( 'options-general.php?page=sml-theme-strings' ) );
+        $url = add_query_arg( array( 'saved' => '1', 's' => isset( $_POST['s'] ) ? sanitize_text_field( $_POST['s'] ) : '', 'source' => isset( $_POST['source'] ) ? sanitize_text_field( $_POST['source'] ) : '', 'paged' => absint( $_POST['paged'] ?? 1 ) ), admin_url( 'options-general.php?page=sml-theme-strings' ) );
         wp_safe_redirect( $url );
         exit;
     }

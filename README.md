@@ -99,7 +99,7 @@ When an editor changes the title, excerpt or content of a post/page/product in a
 
 ## PO exchange and switcher block
 
-**Settings → Interface strings** can export translations for one language as a PO file and import the same PO format later. This only writes the plugin's own interface-string catalogue; it never replaces a theme or plugin's shipped PO/MO files. Entries marked `fuzzy` import as **Requires review**.
+**Settings → Interface strings** can export translations for one language as a PO file and import the same PO format later. Use the **All sources** selector beside search to narrow the table to the active theme, one plugin or an imported catalogue; it remains combined with text search, saving and pagination. This only writes the plugin's own interface-string catalogue; it never replaces a theme or plugin's shipped PO/MO files. Entries marked `fuzzy` import as **Requires review**.
 
 The **Language switcher** block is available in the Block and Site editors. It renders the same current-page links, accessibility labels and theme-aware visual style as `[sml_language_switcher]`; no custom theme PHP is required.
 
