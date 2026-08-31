@@ -51,6 +51,7 @@ final class SML_Core {
         add_action( 'wp_head', array( $this, 'output_hreflang' ), 1 );
         add_filter( 'redirect_canonical', array( $this, 'prevent_language_canonical_redirect' ), 10, 2 );
         add_action( 'template_redirect', array( $this, 'redirect_noncanonical_language_url' ), 1 );
+        add_action( 'template_redirect', array( $this, 'queue_on_demand_translation' ), 20 );
         add_shortcode( 'sml_language_switcher', array( $this, 'language_switcher_shortcode' ) );
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_assets' ) );
         add_action( 'wp_body_open', array( $this, 'render_automatic_switcher' ), 20 );
@@ -976,6 +977,38 @@ final class SML_Core {
                 exit;
             }
         }
+    }
+
+    /**
+     * Optionally queue a review-only draft when a visitor opens public source
+     * content through a language URL that has no linked counterpart yet.
+     *
+     * This never calls a provider in the page request and is opt-in because a
+     * public URL may otherwise be used to consume a site's translation budget.
+     */
+    public function queue_on_demand_translation() {
+        if ( is_admin() || wp_doing_ajax() || ( function_exists( 'wp_is_json_request' ) && wp_is_json_request() ) || ! is_singular() || ! get_query_var( 'sml_language' ) || ! class_exists( 'SML_Translation_Service' ) ) {
+            return;
+        }
+
+        $language = self::get_current_language();
+        $post_id = absint( get_queried_object_id() );
+        if ( ! $post_id || ! self::is_public_post( $post_id ) || ! in_array( get_post_type( $post_id ), self::get_post_types(), true ) || self::get_post_language( $post_id ) === $language ) {
+            return;
+        }
+
+        $translations = self::get_post_translations( $post_id );
+        if ( ! empty( $translations[ $language ] ) || ! apply_filters( 'sml_on_demand_translation_candidate', true, $post_id, $language ) ) {
+            return;
+        }
+
+        // The source must already be safely visible in this language. The
+        // static homepage is the one intentional fallback handled separately.
+        if ( ! self::post_is_visible_in_language( $post_id, $language ) && ! self::is_translated_front_page( $post_id ) ) {
+            return;
+        }
+
+        SML_Translation_Service::queue_visitor_draft( $post_id, $language );
     }
 
     public function output_hreflang() {
@@ -1905,6 +1938,8 @@ final class SML_Core {
         $switcher_has_custom_colors = (bool) array_filter( array_intersect_key( $switcher_design, array_flip( array( 'surface', 'foreground', 'accent', 'active_foreground', 'border' ) ) ) );
         $openai_models = SML_Translation_Service::openai_models();
         $selected_openai_model = SML_Translation_Service::openai_model();
+        $on_demand_translation_enabled = SML_Translation_Service::is_on_demand_enabled();
+        $on_demand_translation_limit = SML_Translation_Service::on_demand_daily_limit();
         $front_page_id = 'page' === get_option( 'show_on_front' ) ? self::front_page_source_id() : 0;
         $front_page_translations = $front_page_id ? self::get_post_translations( $front_page_id ) : array();
         $can_edit_front_page = $front_page_id && current_user_can( 'edit_post', $front_page_id );
@@ -1981,6 +2016,7 @@ final class SML_Core {
         <p class="sml-switcher-colors"><label><?php esc_html_e( 'Background', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[surface]" value="<?php echo esc_attr( $switcher_design['surface'] ?: '#ffffff' ); ?>"></label> <label><?php esc_html_e( 'Text', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[foreground]" value="<?php echo esc_attr( $switcher_design['foreground'] ?: '#27364a' ); ?>"></label> <label><?php esc_html_e( 'Active background', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[accent]" value="<?php echo esc_attr( $switcher_design['accent'] ?: '#174ea6' ); ?>"></label> <label><?php esc_html_e( 'Active text', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[active_foreground]" value="<?php echo esc_attr( $switcher_design['active_foreground'] ?: '#ffffff' ); ?>"></label> <label><?php esc_html_e( 'Border', 'simple-multilang-blocks' ); ?> <input type="color" name="sml_switcher_design[border]" value="<?php echo esc_attr( $switcher_design['border'] ?: '#d6dce5' ); ?>"></label></p>
         <p class="description"><code>[sml_language_switcher]</code> <?php esc_html_e( 'inherits these settings. Themes can use the shortcode or the block inside a header; automatic mode is a floating fallback.', 'simple-multilang-blocks' ); ?></p>
         <h2><?php esc_html_e( 'Automatic translation', 'simple-multilang-blocks' ); ?></h2><p><label><?php esc_html_e( 'Provider', 'simple-multilang-blocks' ); ?> <select name="sml_translation_provider"><option value="" <?php selected( '', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'Disabled', 'simple-multilang-blocks' ); ?></option><option value="deepl" <?php selected( 'deepl', SML_Translation_Service::provider() ); ?>>DeepL</option><option value="openai" <?php selected( 'openai', SML_Translation_Service::provider() ); ?>><?php esc_html_e( 'OpenAI / ChatGPT', 'simple-multilang-blocks' ); ?></option></select></label></p><p><label><?php esc_html_e( 'OpenAI model', 'simple-multilang-blocks' ); ?> <select name="sml_openai_model"><?php foreach ( $openai_models as $model_id => $model ) : ?><option value="<?php echo esc_attr( $model_id ); ?>" <?php selected( $selected_openai_model, $model_id ); ?>><?php echo esc_html( $model['label'] . ' — ' . $model['description'] ); ?></option><?php endforeach; ?></select></label></p><?php if ( defined( 'SML_OPENAI_MODEL' ) ) : ?><p class="description"><?php esc_html_e( 'The SML_OPENAI_MODEL value in wp-config.php currently overrides this selection.', 'simple-multilang-blocks' ); ?></p><?php endif; ?><p><label><?php esc_html_e( 'DeepL endpoint', 'simple-multilang-blocks' ); ?> <select name="sml_deepl_endpoint"><option value="free" <?php selected( 'free', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api-free.deepl.com</option><option value="pro" <?php selected( 'pro', get_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, 'free' ) ); ?>>api.deepl.com</option></select></label></p><div class="notice notice-info inline"><p><?php esc_html_e( 'API keys are never stored in WordPress. Generated posts remain drafts and generated taxonomy terms require review; if the service is unavailable, no content is created and no public-page error is shown. Add either SML_DEEPL_API_KEY or SML_OPENAI_API_KEY to wp-config.php.', 'simple-multilang-blocks' ); ?></p></div>
+        <h3><?php esc_html_e( 'Visitor-triggered drafts', 'simple-multilang-blocks' ); ?></h3><p><label><input type="checkbox" name="sml_on_demand_translation" value="1" <?php checked( $on_demand_translation_enabled ); ?>> <?php esc_html_e( 'Queue a review-only draft when a visitor opens public source content through an untranslated language URL', 'simple-multilang-blocks' ); ?></label></p><p><label><?php esc_html_e( 'Maximum queued visitor drafts per day', 'simple-multilang-blocks' ); ?> <input name="sml_on_demand_translation_daily_limit" type="number" min="1" max="100" value="<?php echo esc_attr( $on_demand_translation_limit ); ?>"></label></p><?php if ( defined( 'SML_ON_DEMAND_TRANSLATION' ) || defined( 'SML_ON_DEMAND_TRANSLATION_DAILY_LIMIT' ) ) : ?><p class="description"><?php esc_html_e( 'An SML_ON_DEMAND_TRANSLATION value or daily-limit value in wp-config.php overrides this setting.', 'simple-multilang-blocks' ); ?></p><?php endif; ?><p class="description"><?php esc_html_e( 'This option is off by default to protect the translation budget from crawlers. Visitor requests never wait for an API call, visitor data is not stored, and a generated translation is always a draft marked Requires review.', 'simple-multilang-blocks' ); ?></p>
         <p><button class="button button-primary"><?php esc_html_e( 'Save settings', 'simple-multilang-blocks' ); ?></button></p></form>
         <hr><h2><?php esc_html_e( 'WPML migration', 'simple-multilang-blocks' ); ?></h2><p><?php esc_html_e( 'Imports active languages, selected posts, selected taxonomies and String Translation values. It never deletes WPML tables or options.', 'simple-multilang-blocks' ); ?></p>
         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><?php wp_nonce_field( 'sml_preview_wpml' ); ?><input type="hidden" name="action" value="sml_preview_wpml"><p><button class="button button-secondary"> <?php esc_html_e( 'Run migration preflight', 'simple-multilang-blocks' ); ?></button></p></form>
@@ -2063,6 +2099,9 @@ final class SML_Core {
         $openai_model = isset( $_POST['sml_openai_model'] ) ? sanitize_key( wp_unslash( $_POST['sml_openai_model'] ) ) : SML_Translation_Service::DEFAULT_OPENAI_MODEL;
         update_option( SML_Translation_Service::OPTION_OPENAI_MODEL, isset( $openai_models[ $openai_model ] ) ? $openai_model : SML_Translation_Service::DEFAULT_OPENAI_MODEL );
         update_option( SML_Translation_Service::OPTION_DEEPL_ENDPOINT, isset( $_POST['sml_deepl_endpoint'] ) && 'pro' === sanitize_key( wp_unslash( $_POST['sml_deepl_endpoint'] ) ) ? 'pro' : 'free' );
+        update_option( SML_Translation_Service::OPTION_ON_DEMAND_TRANSLATION, ! empty( $_POST['sml_on_demand_translation'] ) );
+        $on_demand_limit = isset( $_POST['sml_on_demand_translation_daily_limit'] ) ? absint( $_POST['sml_on_demand_translation_daily_limit'] ) : SML_Translation_Service::DEFAULT_ON_DEMAND_DAILY_LIMIT;
+        update_option( SML_Translation_Service::OPTION_ON_DEMAND_DAILY_LIMIT, max( 1, min( 100, $on_demand_limit ? $on_demand_limit : SML_Translation_Service::DEFAULT_ON_DEMAND_DAILY_LIMIT ) ) );
         self::schedule_rewrite_flush();
         wp_safe_redirect( add_query_arg( 'updated', '1', admin_url( 'options-general.php?page=simple-multilang-blocks' ) ) );
         exit;

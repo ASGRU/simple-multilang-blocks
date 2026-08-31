@@ -4,7 +4,7 @@ Tags: multilingual, gutenberg, woocommerce, wpml migration
 Requires at least: 6.4
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.6.3
+Stable tag: 1.7.0
 License: GPL-2.0-or-later
 
 A lightweight multilingual layer for block-based WordPress sites.
@@ -49,6 +49,10 @@ or
 The model selector offers a reviewed, economical list: **GPT-5 mini** (recommended for written translation) and **GPT-5 nano** (simple high-volume text after editorial evaluation). A `SML_OPENAI_MODEL` value in `wp-config.php` can override the selector, but the plugin accepts only these reviewed choices unless a developer extends `sml_openai_translation_models`.
 
 The plugin never sends content to a provider until an editor queues a translation. The request runs through a small WordPress background queue and retries a temporary provider problem up to three times. Successful post results are linked drafts; taxonomy terms use the same queue and a review marker. Neither is published automatically. Failed jobs remain visible in **Tools → Translation review**. If a provider is unavailable, no duplicate content, term or frontend error is shown.
+
+== Visitor-triggered drafts ==
+
+**Settings → Simple Multilang → Automatic translation** can opt in to queue a review-only draft when a visitor opens public source content through an untranslated language URL. It is disabled by default to protect provider budget from crawlers and has a daily cap of 10 queued drafts (maximum 100). A visitor never waits for an API call, no visitor data is stored, and the public page stays on its safe source content until an editor verifies and publishes the draft. Repeated requests for one item and failed jobs do not consume budget again.
 
 == Interface strings ==
 

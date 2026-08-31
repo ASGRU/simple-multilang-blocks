@@ -12,11 +12,14 @@ final class SML_Translation_Service {
     const OPTION_PROVIDER       = 'sml_translation_provider';
     const OPTION_OPENAI_MODEL   = 'sml_openai_model';
     const OPTION_DEEPL_ENDPOINT = 'sml_deepl_endpoint';
+    const OPTION_ON_DEMAND_TRANSLATION = 'sml_on_demand_translation';
+    const OPTION_ON_DEMAND_DAILY_LIMIT = 'sml_on_demand_translation_daily_limit';
     const OPTION_JOBS           = 'sml_translation_jobs';
     const OPTION_TERM_JOBS      = 'sml_term_translation_jobs';
     const CRON_HOOK             = 'sml_process_translation_job';
     const TERM_CRON_HOOK        = 'sml_process_term_translation_job';
     const DEFAULT_OPENAI_MODEL  = 'gpt-5-mini';
+    const DEFAULT_ON_DEMAND_DAILY_LIMIT = 10;
     const MAX_ATTEMPTS          = 3;
     const MAX_STORED_JOBS       = 100;
 
@@ -97,6 +100,60 @@ final class SML_Translation_Service {
         }
 
         return false;
+    }
+
+    /** Whether public-language requests may queue review-only drafts. */
+    public static function is_on_demand_enabled() {
+        $enabled = defined( 'SML_ON_DEMAND_TRANSLATION' ) ? (bool) SML_ON_DEMAND_TRANSLATION : (bool) get_option( self::OPTION_ON_DEMAND_TRANSLATION, false );
+        return (bool) apply_filters( 'sml_on_demand_translation_enabled', $enabled );
+    }
+
+    /** A modest cap protects an opt-in provider budget from crawler traffic. */
+    public static function on_demand_daily_limit() {
+        $limit = defined( 'SML_ON_DEMAND_TRANSLATION_DAILY_LIMIT' ) ? absint( SML_ON_DEMAND_TRANSLATION_DAILY_LIMIT ) : absint( get_option( self::OPTION_ON_DEMAND_DAILY_LIMIT, self::DEFAULT_ON_DEMAND_DAILY_LIMIT ) );
+        $limit = max( 1, min( 100, $limit ? $limit : self::DEFAULT_ON_DEMAND_DAILY_LIMIT ) );
+        return max( 1, min( 100, absint( apply_filters( 'sml_on_demand_translation_daily_limit', $limit ) ) ) );
+    }
+
+    /**
+     * Queues at most one machine-translation job for a public request. A
+     * visitor never waits for an API call, and the request itself is not kept.
+     *
+     * @return array|WP_Error
+     */
+    public static function queue_visitor_draft( $source_post_id, $target_language ) {
+        if ( ! self::is_on_demand_enabled() ) {
+            return new WP_Error( 'sml_on_demand_disabled', __( 'On-demand translations are disabled.', 'simple-multilang-blocks' ) );
+        }
+        if ( ! self::is_available() ) {
+            return new WP_Error( 'sml_provider_unavailable', __( 'The selected translation service is unavailable. No draft was created.', 'simple-multilang-blocks' ) );
+        }
+
+        $source_post_id = absint( $source_post_id );
+        $target_language = sanitize_key( $target_language );
+        $validation = self::validate_machine_request( $source_post_id, $target_language );
+        if ( is_wp_error( $validation ) ) {
+            return $validation;
+        }
+
+        // A failed job deliberately remains editor-controlled. Repeated page
+        // views must not keep retrying a bad provider response or spend budget.
+        $existing = self::get_job( $source_post_id, $target_language );
+        if ( $existing ) {
+            return $existing;
+        }
+
+        $quota_key = 'sml_on_demand_translation_quota_' . gmdate( 'Ymd' );
+        $used = absint( get_transient( $quota_key ) );
+        if ( $used >= self::on_demand_daily_limit() ) {
+            return new WP_Error( 'sml_on_demand_limit', __( 'The daily on-demand translation limit has been reached.', 'simple-multilang-blocks' ) );
+        }
+
+        $queued = self::queue_machine_draft( $source_post_id, $target_language );
+        if ( ! is_wp_error( $queued ) ) {
+            set_transient( $quota_key, $used + 1, DAY_IN_SECONDS );
+        }
+        return $queued;
     }
 
     /**

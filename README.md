@@ -15,7 +15,7 @@ Simple Multilang Blocks is a small, self-contained multilingual layer for WordPr
 
 ## Release process
 
-Push a semantic-version tag such as `v1.6.3`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
+Push a semantic-version tag such as `v1.7.0`. The included GitHub Actions workflow packages `simple-multilang-blocks.zip`, including the GPL license, and creates a GitHub Release. WordPress discovers public releases on the usual plugin-update schedule; private repositories require the documented read-only token.
 
 ## License
 
@@ -85,6 +85,10 @@ define( 'SML_OPENAI_MODEL', 'gpt-5-mini' );
 ```
 
 The admin settings select the DeepL Free/Pro endpoint and a short OpenAI model list, but never accept or display API secrets. **GPT-5 mini** is the recommended default for written translations; **GPT-5 nano** is available only for simple high-volume work after editorial evaluation. The list can be extended by code through `sml_openai_translation_models`; the settings screen otherwise cannot select an unreviewed model. Editor requests enter a small WordPress queue, which retries a temporary provider failure up to three times. Posts become drafts and taxonomy terms receive a **Requires review** marker; both appear under **Tools → Translation review**. If the provider is disabled, unavailable or returns an invalid response, no duplicate content, term or frontend error is created.
+
+### Visitor-triggered drafts
+
+Under **Settings → Simple Multilang → Automatic translation**, an editor may opt in to create a review-only draft when a visitor opens public source content through a language URL that has no linked translation. This is off by default: public crawlers can otherwise consume a translation budget. The setting has a daily cap (10 by default, 100 maximum); repeated requests for the same item and failed jobs do not consume the budget again. No API call runs in the page response and no visitor identifiers are stored. The page remains safely available in its current source form until an editor reviews and publishes the generated draft. Use `sml_on_demand_translation_candidate` to reject individual source items, or `sml_on_demand_translation_enabled` and `sml_on_demand_translation_daily_limit` for code-level policy.
 
 ## PO exchange and switcher block
 
